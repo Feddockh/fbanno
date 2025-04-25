@@ -18,10 +18,17 @@ color_palette = [
 def get_color(index):
     return color_palette[index % len(color_palette)]
 
-def to_uint8(img) -> torch.Tensor:
+def to_tensor_img(img) -> torch.Tensor:
     # If PIL Image, convert to tensor first
     if isinstance(img, Image.Image):
-        img = F.pil_to_tensor(img)  # uint8 [C,H,W]
+        img = F.pil_to_tensor(img)  # uint8 [C,H,W] --> [C,H,W]
+    
+    # If tensor, ensure it is in the correct format [C,H,W]
+    if img.ndim == 3 and img.shape[2] == 3:
+        img = img.permute(2, 0, 1)  # H×W×C --> C×H×W
+    elif img.ndim == 2:
+        img = img.unsqueeze(0) # H×W --> 1xH×W
+    
     # If float tensor, scale to [0,255] and convert manually
     if img.dtype.is_floating_point:
         img = (img * 255.0).clamp(0, 255).to(torch.uint8)
@@ -68,22 +75,25 @@ def plot(imgs, row_title=None, col_title=None, class_names=None, save_path=None,
                     raise ValueError(f"Unexpected target type: {type(tgt)}")
 
             # Convert img to a uint8 tensor [C,H,W]
-            img = to_uint8(img)
+            img = to_tensor_img(img)
 
             if masks is not None:
-                # Masks should be Tensor [N,H,W] or a list of H×W bool/uint8
-                m = masks if isinstance(masks, torch.Tensor) else torch.stack(masks)
+                # Check that masks are filled
+                if masks.numel() > 0 and torch.sum(masks) > 0:
+                    
+                    # Masks should be Tensor [N,H,W] or a list of H×W bool/uint8
+                    m = masks if isinstance(masks, torch.Tensor) else torch.stack(masks)
 
-                # Ensure labels are available and match number of masks
-                if labels_t is None or len(labels_t) != m.shape[0]:
-                    raise ValueError("Labels must be provided and match number of masks for consistent coloring.")
+                    # Ensure labels are available and match number of masks
+                    if labels_t is None or len(labels_t) != m.shape[0]:
+                        raise ValueError("Labels must be provided and match number of masks for consistent coloring.")
 
-                mask_colors = [get_color(label.item()) for label in labels_t]
-                img = draw_segmentation_masks(
-                    img, m.to(torch.bool),
-                    colors=mask_colors,
-                    alpha=0.5
-                )
+                    mask_colors = [get_color(label.item()) for label in labels_t]
+                    img = draw_segmentation_masks(
+                        img, m.to(torch.bool),
+                        colors=mask_colors,
+                        alpha=0.5
+                    )
 
             # Convert boxes to a tensor if they are not already
             if boxes is not None and len(boxes):

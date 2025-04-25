@@ -1,4 +1,5 @@
 import os
+import json
 import numpy as np
 from typing import List, Dict, Tuple
 from pycocotools.coco import COCO
@@ -8,7 +9,7 @@ from torchvision.io import decode_image
 from torchvision.transforms import v2
 from torchvision.transforms.v2 import functional as F
 from torchvision.tv_tensors import Image, BoundingBoxes, BoundingBoxFormat, Mask
-from camera import Camera
+from utils.camera import Camera
 from utils.visual import plot
 
 
@@ -23,7 +24,8 @@ class SetType:
 
 class MultiCamDataset(Dataset):
     def __init__(self, base_dir: str, cameras: List[Camera], 
-                 set_type: SetType = SetType.ALL, transforms = None):
+                 set_type: SetType = SetType.ALL, transforms = None, 
+                 undistort_rectify: bool = False):
         """
         Initialize the multi-cam dataset with the base directory and camera names.
         All cameras must have the same number of images.
@@ -39,6 +41,12 @@ class MultiCamDataset(Dataset):
             if not os.path.exists(cam_dir):
                 raise ValueError(f"Camera directory {cam_dir} does not exist.")
             cam_annotations_path = os.path.join(cam_dir, set_type + '.json')
+            if not os.path.exists(cam_annotations_path):
+                print(f"Annotations file {cam_annotations_path} does not exist... Creating a new one from cam0.")
+                cam0_annotations_path = os.path.join(base_dir, cameras[0].name, set_type + '.json')
+                if not os.path.exists(cam0_annotations_path):
+                    raise ValueError(f"Annotations file {cam0_annotations_path} does not exist.")
+                cam_annotations_path = strip_annotations_coco(cam0_annotations_path, cam_dir)
             self.annotations[cam.name] = COCO(cam_annotations_path)
 
         # Load the image ids from the first camera (should be the same for all cameras)
@@ -52,6 +60,8 @@ class MultiCamDataset(Dataset):
         categories = cam0_coco.loadCats(category_ids)
         self.class_names = [cat['name'] for cat in categories]
         print(f"Loaded {len(self.class_names)} classes: {self.class_names}")
+
+        self.undistort_rectify = undistort_rectify
 
     def __len__(self):
         return len(self.ids)
@@ -145,6 +155,19 @@ class MultiCamDataset(Dataset):
                 'labels': labels_tensor
             }
 
+            # Add grid lines to the image for visualization
+            # spacing = img.shape[1] // 10
+            # img[:, ::spacing, :] = 1.0; img[:, :, ::spacing] = 1.0
+
+            # If the undistort_rectify flag is set, undistort and rectify the image and annotations
+            if self.undistort_rectify:
+                img = cam.undistort_rectify_image(img)
+                target = cam.undistort_rectify_target(target)
+
+            # Check if the target is a tv tensor (necessary for transforms)
+            if not isinstance(target['boxes'], BoundingBoxes) or not isinstance(target['masks'], Mask):
+                raise ValueError("Target must be a tv tensor with boxes and masks.")
+
             # Apply transform if provided (can apply to both image and annotations)
             # due to the use of torchvision.transforms.v2 and torchvision.tv_tensors
             if self.transforms:
@@ -153,8 +176,8 @@ class MultiCamDataset(Dataset):
             # Add the image and annotations to the sample for this camera
             sample[cam.name] = (img, target, img_path)
 
-            # Filter out invalid targets
-            sample = self._filter_invalid_targets(sample)
+        # Filter out invalid targets
+        sample = self._filter_invalid_targets(sample)
         return sample
     
     def _filter_invalid_targets(self, sample: Dict[str, Tuple[Image, Dict[str, torch.Tensor]]]) \
@@ -180,6 +203,36 @@ class MultiCamDataset(Dataset):
         """
         return self.class_names
     
+def strip_annotations_coco(input_json_path: str, output_dir: str) -> str:
+    """
+    Copy a COCO-format annotations file to a new directory,
+    but with all 'annotations' removed.
+
+    Args:
+        input_json_path: Path to the original COCO annotations.json.
+        output_dir:      Directory to write the new annotations.json.
+                        It will be created if it doesn't exist.
+
+    Returns:
+        The path to the new annotations file.
+    """
+    # 1) Make sure the output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 2) Load the original JSON
+    with open(input_json_path, 'r') as f:
+        coco = json.load(f)
+
+    # 3) Remove all annotations
+    coco['annotations'] = []
+
+    # 4) Write out the new JSON
+    out_path = os.path.join(output_dir, os.path.basename(input_json_path))
+    with open(out_path, 'w') as f:
+        json.dump(coco, f, indent=2)
+
+    return out_path
+    
 def demo():
     # Create the cameras
     cam0 = Camera("firefly_left") # Use this for the rivendale dataset
@@ -189,7 +242,7 @@ def demo():
     # Define the transforms
     transforms = v2.Compose([
         v2.Resize((1024, 1024), antialias=True), # Higher for finer details
-        v2.RandomHorizontalFlip(p=0.5),
+        # v2.RandomHorizontalFlip(p=0.5),
     ])
 
     # Create the dataset
@@ -204,6 +257,12 @@ def demo():
     print(f"Annotation labels shape: {target['labels'].shape}")
     print(f"Annotation labels: {target['labels']}")
     plot([(img, target)])
+
+    # Show rectified image
+    cam0.load_params()
+    dataset_rect = MultiCamDataset(DATA_DIR, cameras, set_type=SetType.ALL, transforms=transforms, undistort_rectify=True)
+    img0_rect, tgt0_rect, _ = dataset_rect[view_idx][cam0.name]
+    plot([[(img, target)], [(img0_rect, tgt0_rect)]], row_title=["Original Image", "Rectified Image"])
 
 if __name__ == '__main__':
     demo()

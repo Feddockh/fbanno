@@ -11,7 +11,7 @@ def main():
     # image_path = "rivendale_dataset/firefly_left/images/1739373919_100068096.png"
     image_path = "rivendale_dataset/firefly_left/images/1739373952_347697152.png"
     # box        = [600, 600, 900, 900]     # x1, y1, x2, y2 in pixel coords
-    box        = [630, 750, 800, 760] 
+    box        = [630, 740, 800, 760] 
     device     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     checkpoint = None  # or "path/to/sam2_checkpoint.pth"
     config     = None  # or "path/to/sam2_config.yaml"
