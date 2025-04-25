@@ -73,9 +73,15 @@ def plot(imgs, row_title=None, col_title=None, class_names=None, save_path=None,
             if masks is not None:
                 # Masks should be Tensor [N,H,W] or a list of H×W bool/uint8
                 m = masks if isinstance(masks, torch.Tensor) else torch.stack(masks)
+
+                # Ensure labels are available and match number of masks
+                if labels_t is None or len(labels_t) != m.shape[0]:
+                    raise ValueError("Labels must be provided and match number of masks for consistent coloring.")
+
+                mask_colors = [get_color(label.item()) for label in labels_t]
                 img = draw_segmentation_masks(
                     img, m.to(torch.bool),
-                    colors=[get_color(i) for i in range(m.shape[0])],
+                    colors=mask_colors,
                     alpha=0.5
                 )
 
