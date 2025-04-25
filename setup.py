@@ -8,7 +8,7 @@ import re
 
 
 # ----- Configuration Variables -----
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # DINOv2 repository configuration
 # DINOV2_REPO_URL = "https://github.com/facebookresearch/dinov2.git"
