@@ -22,6 +22,13 @@ def to_tensor_img(img) -> torch.Tensor:
     # If PIL Image, convert to tensor first
     if isinstance(img, Image.Image):
         img = F.pil_to_tensor(img)  # uint8 [C,H,W] --> [C,H,W]
+
+    if isinstance(img, np.ndarray):
+        # Check if the image is grayscale
+        if img.ndim == 2:
+            img = np.expand_dims(img, axis=-1) # H×W --> H×W×1
+        # Convert to tensor and permute to [C,H,W]
+        img = torch.from_numpy(img).permute(2, 0, 1)
     
     # If tensor, ensure it is in the correct format [C,H,W]
     if img.ndim == 3 and img.shape[2] == 3:
@@ -29,11 +36,12 @@ def to_tensor_img(img) -> torch.Tensor:
     elif img.ndim == 2:
         img = img.unsqueeze(0) # H×W --> 1xH×W
     
-    # If float tensor, scale to [0,255] and convert manually
-    if img.dtype.is_floating_point:
+    # If image is 0 to 1, convert to 0 to 255, clamp, and convert to uint8
+    if img.dtype.is_floating_point and img.max() <= 1.0:
         img = (img * 255.0).clamp(0, 255).to(torch.uint8)
+    # Otherwise, image must be in [0,255] range, so convert to uint8
     else:
-        img = img.to(torch.uint8)
+        img = img.clamp(0, 255).to(torch.uint8)
     return img
 
 def plot(imgs, row_title=None, col_title=None, class_names=None, save_path=None, **imshow_kwargs):

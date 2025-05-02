@@ -21,6 +21,7 @@ class Camera:
         self.dist_coeffs: np.ndarray = np.zeros((5,), dtype=np.float32)
         self.rectification_matrix: np.ndarray = np.eye(3, dtype=np.float32)
         self.projection_matrix: np.ndarray = np.zeros((3, 4), dtype=np.float32)
+        self.transforms: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
 
         self.map1: np.ndarray = None
         self.map2: np.ndarray = None
@@ -40,6 +41,12 @@ class Camera:
         self.dist_coeffs = np.array(calib_data['distortion_coefficients']['data'], dtype=np.float32)
         self.rectification_matrix = np.array(calib_data['rectification_matrix']['data'], dtype=np.float32).reshape((3, 3))
         self.projection_matrix = np.array(calib_data['projection_matrix']['data'], dtype=np.float32).reshape((3, 4))
+        # Load transforms if available
+        if 'transforms' in calib_data:
+            for name, transform in calib_data['transforms'].items():
+                R = np.array(transform['R'], dtype=np.float32).reshape((3, 3))
+                t = np.array(transform['t'], dtype=np.float32).reshape((3,))
+                self.transforms[name] = (R, t)
 
     def compute_maps(self):
         """
