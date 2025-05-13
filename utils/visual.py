@@ -19,25 +19,28 @@ def get_color(index):
     return color_palette[index % len(color_palette)]
 
 def to_tensor_img(img) -> torch.Tensor:
-    # If PIL Image, convert to tensor first
+    # If PIL Image, convert to tensor
     if isinstance(img, Image.Image):
-        img = F.pil_to_tensor(img)  # uint8 [C,H,W] --> [C,H,W]
+        img = F.pil_to_tensor(img)
 
+    # If the image is a numpy array, convert to tensor
     if isinstance(img, np.ndarray):
-        # Check if the image is grayscale
-        if img.ndim == 2:
-            img = np.expand_dims(img, axis=-1) # H×W --> H×W×1
-        # Convert to tensor and permute to [C,H,W]
-        img = torch.from_numpy(img).permute(2, 0, 1)
-    
-    # If tensor, ensure it is in the correct format [C,H,W]
-    if img.ndim == 3 and img.shape[2] == 3:
-        img = img.permute(2, 0, 1)  # H×W×C --> C×H×W
-    elif img.ndim == 2:
-        img = img.unsqueeze(0) # H×W --> 1xH×W
+        img = torch.from_numpy(img)
+
+    # Get the image into the shape (C, H, W)
+    # If grayscale, expand to 3 channels
+    if img.ndim == 2:
+        img = img.unsqueeze(0).repeat(3, 1, 1)
+    elif img.shape[0] == 1:
+        img = img.expand(3, -1, -1)
+    elif img.shape[2] == 1:
+        img = img.expand(-1, -1, 3)
+    # Permute to (C, H, W) if needed
+    if img.shape[2] == 3:
+        img = img.permute(2, 0, 1)  # (H, W, C) to (C, H, W)
     
     # If image is 0 to 1, convert to 0 to 255, clamp, and convert to uint8
-    if img.dtype.is_floating_point and img.max() <= 1.0:
+    if img.dtype.is_floating_point and img.max().round() <= 1.0:
         img = (img * 255.0).clamp(0, 255).to(torch.uint8)
     # Otherwise, image must be in [0,255] range, so convert to uint8
     else:

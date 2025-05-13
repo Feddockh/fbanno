@@ -235,14 +235,15 @@ def strip_annotations_coco(input_json_path: str, output_dir: str) -> str:
     
 def demo():
     # Create the cameras
-    cam0 = Camera("firefly_left") # Use this for the rivendale dataset
+    cam0 = Camera("ximea") # Use this for the rivendale dataset
     # cam0 = Camera("cam0") # Use this for the erwiam dataset
     cameras = [cam0]
 
     # Define the transforms
     transforms = v2.Compose([
-        v2.Resize((1024, 1024), antialias=True), # Higher for finer details
+        # v2.Resize((1024, 1024), antialias=True), # Higher for finer details
         # v2.RandomHorizontalFlip(p=0.5),
+        v2.ToTensor(),
     ])
 
     # Create the dataset
@@ -262,6 +263,7 @@ def demo():
     cam0.load_params()
     dataset_rect = MultiCamDataset(DATA_DIR, cameras, set_type=SetType.ALL, transforms=transforms, undistort_rectify=True)
     img0_rect, tgt0_rect, _ = dataset_rect[view_idx][cam0.name]
+    print(f"Rectified image shape: {img0_rect.shape}")
     plot([[(img, target)], [(img0_rect, tgt0_rect)]], row_title=["Original Image", "Rectified Image"])
 
 if __name__ == '__main__':

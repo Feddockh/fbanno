@@ -15,22 +15,22 @@ def image_to_numpy(image: torch.Tensor | np.ndarray | Image.Image) -> np.ndarray
     Returns:
         img_np: numpy array of shape (H, W, C) with dtype uint8.
     """
-    # Torch tensor has shape [C,H,W], we need to convert it to [H,W,C] for numpy
+    # Torch tensor has shape (C,H,W), we need to convert it to (H,W,C) for numpy
     if isinstance(image, torch.Tensor):
         img_t = image.detach().cpu()
         # If the tensor is 2D, add a channel dimension
         if img_t.ndim == 2:
-            img_t = img_t.unsqueeze(0) # [H,W] --> [1,H,W]
-        # If the tensor is 3D, permute it to [H,W,C]
-        if img_t.ndim == 3 and img_t.shape[0] == 3:
-            img_t = img_t.permute(1, 2, 0) # [C,H,W] --> [H,W,C]
+            img_t = img_t.unsqueeze(0) # (H,W) --> (1,H,W)
+        # If the tensor is 3D, permute it to (H,W,C)
+        if img_t.ndim == 3 and (img_t.shape[0] == 3 or img_t.shape[0] == 1): # Fixed bug here that skipped the case of 1 channel
+            img_t = img_t.permute(1, 2, 0) # (C,H,W) --> (H,W,C)
         # Scale the image to [0,255] and convert to uint8 if it is a float tensor
-        if torch.is_floating_point(img_t):
+        if torch.is_floating_point(img_t) and img_t.max().round() <= 1.0:
             img_t = (img_t * 255.0).clamp(0, 255).to(torch.uint8)
         # If not a float tensor, convert to uint8
         else:
             img_t = img_t.to(torch.uint8)
-        img_np = img_t.numpy()
+        img_np = img_t.numpy() # (H,W,C)
     # If the image is already a numpy array, do nothing
     elif isinstance(image, np.ndarray):
         img_np = image

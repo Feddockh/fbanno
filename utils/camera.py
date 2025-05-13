@@ -76,17 +76,30 @@ class Camera:
             self.compute_maps()
 
         # Rectify the image using the computed maps
-        img_np = image_to_numpy(image) # [H,W,C] uint8
-        rectified_image = cv2.remap(img_np, self.map1, self.map2, cv2.INTER_LINEAR)
-        
-        # Promote the rectified image to at least 3 dims
-        if len(rectified_image.shape) == 2:
-            rectified_image = rectified_image[:, :, np.newaxis] # [H,W] --> [H,W,1]
+        img_np = image_to_numpy(image) # (H,W,C) uint8
+        # print(f"Image shape: {img_np.shape}")
 
-        # Comvert back to original format
+        # # Display the original image
+        # import matplotlib.pyplot as plt
+        # plt.imshow(cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB))
+        # plt.title("Numpy Image")
+        # plt.axis("off")
+        # plt.show()
+
+        rectified_image = cv2.remap(img_np, self.map1, self.map2, cv2.INTER_LINEAR)
+        rectified_image = np.atleast_3d(rectified_image)
+        # print(f"Rectified image shape: {rectified_image.shape}")
+
+        # # Display the rectified image
+        # plt.imshow(cv2.cvtColor(rectified_image, cv2.COLOR_BGR2RGB))
+        # plt.title("Rectified Image")
+        # plt.axis("off")
+        # plt.show()
+        
+        # Convert back to original format
         if isinstance(image, torch.Tensor):
-            # Convert to uint8 and permute to [C,H,W]
-            rectified_image = torch.tensor(rectified_image, dtype=torch.uint8).permute(2, 0, 1) # [H,W,C] --> [C,H,W]
+            # Convert to uint8 and permute to (C,H,W)
+            rectified_image = torch.tensor(rectified_image, dtype=torch.uint8).permute(2, 0, 1) # (H,W,C) --> (C,H,W)
         elif isinstance(image, PIL_Image.Image):
             rectified_image = PIL_Image.fromarray(rectified_image)
         else:
