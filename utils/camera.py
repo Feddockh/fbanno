@@ -52,6 +52,9 @@ class Camera:
         """
         Compute the undistort and rectify maps for the camera.
         """
+        if self.width == 0 or self.height == 0:
+            raise ValueError("Camera parameters not loaded properly. Be sure to call load_params() first.")
+
         self.map1, self.map2 = cv2.initUndistortRectifyMap(
             self.camera_matrix, 
             self.dist_coeffs, 
