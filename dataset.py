@@ -36,6 +36,10 @@ class MultiCamDataset(Dataset):
 
         # Load annotations from COCO format for each camera
         for cam in cameras:
+            # Check that the camera parameters have been loaded
+            if cam.width == 0 or cam.height == 0:
+                raise ValueError(f"Camera parameters not loaded for {cam.name}. Call load_params() first.")
+
             cam_dir = os.path.join(base_dir, cam.name)
             if not os.path.exists(cam_dir):
                 raise ValueError(f"Camera directory {cam_dir} does not exist.")
@@ -234,11 +238,9 @@ def coco_anno_copy(input_json_path: str,
         coco = json.load(f)
 
     # Adjust width/height on images for this camera
-    for img in coco.get("images", []):
-        fn = img.get("file_name", "")
-        if fn.startswith(f"{cam.name}/"):
-            img["width"] = cam.width
-            img["height"] = cam.height
+    for img in coco.get("images"):
+        img["width"] = cam.width
+        img["height"] = cam.height
 
     # Remove all annotations
     coco["annotations"] = []
@@ -303,6 +305,7 @@ def demo():
     cam0 = Camera("firefly_left") # Use this for the rivendale dataset
     cam1 = Camera("ximea") # Use this for the rivendale dataset
     cameras = [cam0, cam1]
+    cam0.load_params(), cam1.load_params()
 
     # Define the transforms
     transforms = v2.Compose([
@@ -325,7 +328,6 @@ def demo():
     plot([(img, target)])
 
     # Show rectified image
-    cam0.load_params(), cam1.load_params()
     dataset_rect = MultiCamDataset(DATA_DIR, cameras, set_type=SetType.ALL, transforms=transforms, undistort_rectify=True)
     img0_rect, tgt0_rect, _ = dataset_rect[view_idx][cam0.name]
     print(f"Rectified image shape: {img0_rect.shape}")
