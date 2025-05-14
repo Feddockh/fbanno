@@ -13,8 +13,7 @@ from utils.camera import Camera
 from utils.visual import plot
 
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "rivendale_dataset")
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rivendale_dataset")
 # DATA_DIR = os.path.join(BASE_DIR, "erwiam_dataset")
 
 class SetType:
@@ -232,6 +231,56 @@ def strip_annotations_coco(input_json_path: str, output_dir: str) -> str:
         json.dump(coco, f, indent=2)
 
     return out_path
+
+def save_annotations_coco(cam_annotations_path: str, image_id: int,
+    target: Dict[str, torch.Tensor], start_id: int = None):
+    """
+    Append the boxes+labels in `target` for `image_id` into the COCO JSON
+    at `cam_annotations_path`.  Backs up the original JSON to .bak.
+
+    Args:
+        cam_annotations_path: path to the camera’s annotations JSON.
+        image_id:             the COCO image_id to annotate.
+        target:               dict with keys 'boxes' (Tensor[N,4] XYXY),
+                              'labels' (Tensor[N], category IDs).
+        start_id:             if provided, the first annotation ID to use.
+                              Otherwise picks max(existing IDs)+1.
+    """
+    # 1) Load existing
+    with open(cam_annotations_path, 'r') as f:
+        coco = json.load(f)
+
+    anns      = coco.setdefault('annotations', [])
+    existing  = [a['id'] for a in anns]
+    next_ann  = (max(existing)+1 if existing and start_id is None else (start_id or 1))
+
+    boxes = target['boxes'].tolist()
+    labels = target['labels'].tolist()
+
+    # 2) Append new annotations
+    for bbox, cat in zip(boxes, labels):
+        x1, y1, x2, y2 = bbox
+        w = x2 - x1
+        h = y2 - y1
+        area = w * h
+        ann = {
+            'id'         : next_ann,
+            'image_id'   : image_id,
+            'category_id': int(cat),
+            'bbox'       : [x1, y1, w, h],
+            'area'       : area,
+            'iscrowd'    : 0
+            # 'segmentation': … (optional RLE or polygon)
+        }
+        anns.append(ann)
+        next_ann += 1
+
+    # 3) Backup + write
+    # bak = cam_annotations_path + '.bak'
+    # os.replace(cam_annotations_path, bak)
+    with open(cam_annotations_path, 'w') as f:
+        json.dump(coco, f, indent=2)
+    print(f"→ Saved {len(boxes)} ann(s) to {cam_annotations_path}")
     
 def demo():
     # Create the cameras

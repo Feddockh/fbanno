@@ -3,86 +3,101 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from sam2.sam2_image_predictor import SAM2ImagePredictor
-from typing import List
+from typing import List, Optional, Union
 from utils.utils import image_to_numpy, bbox_to_numpy
 from omegaconf import OmegaConf
 from FoundationStereo.core.foundation_stereo import FoundationStereo
 from FoundationStereo.core.utils.utils import InputPadder
 from FoundationStereo.Utils import vis_disparity, depth2xyzmap
-
 from utils.visual import plot
 
 
-def predict_sam_masks(image: torch.Tensor | np.ndarray | Image.Image,
-                     boxes: torch.Tensor | np.ndarray | List,
-                     model_type: str = "facebook/sam2-hiera-tiny",
-                     checkpoint: str = None, config: str = None,
-                     device: str = None) -> torch.Tensor:
-    """
-    Given an image and a bbox, returns the highest-scoring SAM2 mask as a torch.Tensor.
+class SAM2Predictor:
+    def __init__(self, model_type: str = "facebook/sam2-hiera-tiny",
+        checkpoint: Optional[str] = None, config: Optional[str] = None,
+        device: Optional[Union[str, torch.device]] = None):
+        """
+        Wraps SAM2ImagePredictor so it’s instantiated only once.
 
-    Args:
-        image: PIL.Image, np.ndarray (H×W×C uint8), or torch.Tensor
-                    (either C×H×W or H×W×C, float [0,1] or uint8 [0,255]).
-        boxes: (4,) array-like / Tensor OR (N,4) array-like / Tensor of [x1,y1,x2,y2].
-        model_type: pretrained SAM2 model identifier (hf).
-        checkpoint: path to a custom SAM2 .pth checkpoint (optional).
-        config: path to SAM2 config.yaml if using a custom checkpoint.
-        device: torch.device; defaults to cuda if available.
+        Args:
+            model_type: HF model identifier (e.g. "facebook/sam2-hiera-tiny").
+            checkpoint: path to custom .pth checkpoint (optional).
+            config:     path to custom SAM2 config.yaml (optional).
+            device:     "cuda"/"cpu" or torch.device (defaults to cuda if available).
+        """
+        # pick device
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device(device)
 
-    Returns:
-        best_mask: torch.BoolTensor of shape (N, H, W).
-    """
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # build the SAM model
+        if checkpoint and config:
+            from sam2.build_sam import build_sam2
+            sam_model = build_sam2(config, checkpoint).to(self.device)
+            self.predictor = SAM2ImagePredictor(sam_model)
+        else:
+            self.predictor = SAM2ImagePredictor.from_pretrained(model_type)
+            self.predictor.model.to(self.device)
 
-    # Build or load SAM predictor
-    if checkpoint and config:
-        from sam2.build_sam import build_sam2
-        sam_model = build_sam2(config, checkpoint).to(device)
-        predictor = SAM2ImagePredictor(sam_model)
-    else:
-        predictor = SAM2ImagePredictor.from_pretrained(model_type)
-        predictor.model.to(device)
-    predictor.model.eval()
+        self.predictor.model.eval()
 
-    # Convert the image to a numpy array
-    img_np = image_to_numpy(image)
+    def predict(self, image: Union[torch.Tensor, np.ndarray, Image.Image],
+        boxes: Union[torch.Tensor, np.ndarray, List], crop: bool = True) -> torch.Tensor:
+        """
+        Given an image and N box(es), returns an (N, H, W) uint8 mask tensor.
 
-    # Set the image in the predictor
-    predictor.set_image(img_np)
+        Args:
+            image: PIL.Image, numpy H×W×C uint8, or torch.Tensor (C×H×W or H×W×C).
+            boxes: (4,) or (N,4) array-like of [x1,y1,x2,y2].
 
-    # Convert the bbox to a numpy array
-    bbox_np = bbox_to_numpy(boxes)
+        Returns:
+            masks: torch.uint8 tensor of shape (N, H, W), values in {0,1}.
+        """
+        # 1) Prepare image & model
+        img_np = image_to_numpy(image)
 
-    # Get the mask prediction for each box
-    if bbox_np.ndim == 1:
-        bbox_np = bbox_np.reshape(1, 4)
-    
-    # Iterate over each box and get the predicted masks
-    masks = []
-    for i in range(bbox_np.shape[0]):
-        # Get the mask for the current box
-        mask, scores, _ = predictor.predict(box=bbox_np[i])
-
-        # Pick the highest-scoring mask
-        best_idx  = int(np.argmax(scores))
-        best_mask = mask[best_idx]
+        # Expand to 3 channels if grayscale
+        if img_np.ndim == 2:
+            img_np = img_np[:, :, None]
         
-        # Remove mask outside the box
-        x1, y1, x2, y2 = map(int, bbox_np[i])
-        bbox_mask = np.zeros_like(best_mask, dtype=bool)
-        bbox_mask[y1:y2, x1:x2] = best_mask[y1:y2, x1:x2]
-        
-        # Append the mask to the list
-        masks.append(bbox_mask)
+        # Repeat channels if needed
+        if img_np.shape[2] == 1:
+            img_np = np.repeat(img_np, 3, axis=2)
 
-    # Stack the list of masks into a 3D array
-    masks = np.stack(masks, axis=0)
+        self.predictor.set_image(img_np)
 
-    # Convert the mask to a torch tensor and return
-    t_masks = torch.tensor(masks, dtype=torch.uint8)
-    return t_masks
+        # 2) Prepare boxes
+        bbox_np = bbox_to_numpy(boxes)
+        if bbox_np.ndim == 1:
+            bbox_np = bbox_np[None, :]
+
+        # 3) Predict per-box and pick best mask
+        masks = []
+        for box in bbox_np:
+            masks_i, scores, _ = self.predictor.predict(box=box)
+
+            # Sort indices by descending score
+            # idxs = np.argsort(scores)[::-1][:2]
+            # mask = np.sum(masks_i[idxs], axis=0) > 0
+
+            best = int(np.argmax(scores))
+            mask = masks_i[best]
+
+            # zero-out outside the box
+            if crop:
+                x1, y1, x2, y2 = map(int, box)
+                cropped = np.zeros_like(mask)
+                cropped[y1:y2, x1:x2] = mask[y1:y2, x1:x2]
+                masks.append(cropped)
+            else:
+                masks.append(mask)
+
+        if len(masks) == 0:
+            raise ValueError("No masks found. Check the input image and boxes.")
+
+        # 4) return as torch tensor
+        masks = np.stack(masks, axis=0)
+        return torch.from_numpy(masks.astype(np.uint8))
 
 class FoundationStereoPredictor:
     def __init__(self, checkpoint_path: str, config_path: str, device: str = None):
