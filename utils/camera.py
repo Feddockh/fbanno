@@ -25,6 +25,16 @@ class Camera:
 
         self.map1: np.ndarray = None
         self.map2: np.ndarray = None
+        self.inv_map1: np.ndarray = None
+        self.inv_map2: np.ndarray = None
+
+    def __eq__(self, value):
+        """
+        Check if two Camera objects are equal based on their name.
+        """
+        if isinstance(value, Camera):
+            return self.name == value.name
+        return False
 
     def load_params(self):
         """
@@ -64,12 +74,47 @@ class Camera:
             cv2.CV_16SC2
         )
 
-    def undistort_rectify_image(self, image: np.ndarray | torch.Tensor | PIL_Image.Image) -> np.ndarray | torch.Tensor | PIL_Image.Image:
+    def compute_inverse_maps(self):
+        if self.map1 is None or self.map2 is None:
+            self.compute_maps()
+
+        # Turn your fixed-point maps into a single float32 2‑channel map:
+        #    map_fwd is H×W×2 float32 where map_fwd[v,u] = (x_src, y_src)
+        map_fwd, _ = cv2.convertMaps(self.map1, self.map2, cv2.CV_32FC2)
+
+        H, W = map_fwd.shape[:2]
+        w0, h0 = self.width, self.height
+
+        # Allocate empty inverse map and mark all as unfilled
+        inv_map = np.full((h0, w0, 2), np.nan, dtype=np.float32)
+
+        # For every pixel in the RECTIFIED frame, see where it came from
+        for v in range(H):
+            for u in range(W):
+                x_src, y_src = map_fwd[v, u]
+                ix, iy = int(round(x_src)), int(round(y_src))
+                if 0 <= ix < w0 and 0 <= iy < h0:
+                    # At raw‐image pixel (ix,iy), store that it came from (u,v)
+                    inv_map[iy, ix, 0] = u
+                    inv_map[iy, ix, 1] = v
+
+        # Fill any holes (pixels never visited) by inpainting each channel separately
+        mask = np.isnan(inv_map[..., 0]).astype(np.uint8)
+        # OpenCV inpaint requires 8‑bit 1‑channel mask and float image
+        inv_map[..., 0] = cv2.inpaint(inv_map[..., 0], mask, 3, cv2.INPAINT_NS)
+        inv_map[..., 1] = cv2.inpaint(inv_map[..., 1], mask, 3, cv2.INPAINT_NS)
+
+        self.inv_map1 = inv_map
+        self.inv_map2 = None
+
+    def undistort_rectify_image(self, image: np.ndarray | torch.Tensor | PIL_Image.Image, inverse: bool = False) \
+            -> np.ndarray | torch.Tensor | PIL_Image.Image:
         """
         Undistort and rectify the image using the camera parameters.
 
         Args:
             image: np.ndarray H×W×C | torch.Tensor C×H×W | PIL.Image.
+            inverse: If True, undistort and rectify the image to the original image space.
             
         Returns:
             rectified_image: Undistorted and rectified image in the same format as input.
@@ -77,6 +122,14 @@ class Camera:
         # Compute undistort/rectify map if not already computed
         if self.map1 is None or self.map2 is None:
             self.compute_maps()
+        if inverse and (self.inv_map1 is None or self.inv_map2 is None):
+            self.compute_inverse_maps()
+
+        # Use the appropriate map based on the inverse flag
+        if not inverse:
+            map1, map2 = self.map1, self.map2
+        else:
+            map1, map2 = self.inv_map1, self.inv_map2
 
         # Rectify the image using the computed maps
         img_np = image_to_numpy(image) # (H,W,C) uint8
@@ -89,7 +142,7 @@ class Camera:
         # plt.axis("off")
         # plt.show()
 
-        rectified_image = cv2.remap(img_np, self.map1, self.map2, cv2.INTER_LINEAR)
+        rectified_image = cv2.remap(img_np, map1, map2, cv2.INTER_LINEAR)
         rectified_image = np.atleast_3d(rectified_image)
         # print(f"Rectified image shape: {rectified_image.shape}")
 
@@ -110,7 +163,8 @@ class Camera:
 
         return rectified_image
 
-    def undistort_rectify_target(self, target: Dict[str, torch.Tensor]) -> torch.Tensor | Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    def undistort_rectify_target(self, target: Dict[str, torch.Tensor], inverse: bool = False) \
+            -> Dict[str, torch.Tensor]:
         """
         Undistort and rectify the image using the camera parameters.
 
@@ -119,13 +173,22 @@ class Camera:
                 - 'boxes': BoundingBoxes of shape (N, 4) with bounding boxes in [x1, y1, x2, y2] format.
                 - 'masks': Masks of shape (N, H, W) with binary masks.
                 - 'labels': torch.Tensor of shape (N,) with class labels.
+            inverse: If True, undistort and rectify the target to the original image space.
 
         Returns:
-            image or (image, target): Undistorted and rectified image.
+            target: Undistorted and rectified target.
         """
         # Compute undistort/rectify map if not already computed
         if self.map1 is None or self.map2 is None:
             self.compute_maps()
+        if inverse and (self.inv_map1 is None or self.inv_map2 is None):
+            self.compute_inverse_maps()
+
+        # Use the appropriate map based on the inverse flag
+        if not inverse:
+            map1, map2 = self.map1, self.map2
+        else:
+            map1, map2 = self.inv_map1, self.inv_map2
         
         # Get the bounding boxes from the target
         boxes = target['boxes']
@@ -143,7 +206,7 @@ class Camera:
                 bbox_mask[y1:y2, x1:x2] = 1
 
                 # Perform the undistortion and rectification on the mask
-                bbox_mask = cv2.remap(bbox_mask, self.map1, self.map2, cv2.INTER_LINEAR)
+                bbox_mask = cv2.remap(bbox_mask, map1, map2, cv2.INTER_NEAREST)
                 
                 # Convert the mask back to a bounding box by getting the max and min coordinates
                 box = masks_to_boxes(bbox_mask.reshape(1, self.height, self.width))[0]
@@ -175,7 +238,7 @@ class Camera:
             for i in range(masks_np.shape[0]):
 
                 # Perform the undistortion and rectification on the mask
-                mask = cv2.remap(masks_np[i], self.map1, self.map2, cv2.INTER_LINEAR)
+                mask = cv2.remap(masks_np[i], map1, map2, cv2.INTER_NEAREST)
                 masks.append(mask)
 
             # Convert the list of masks to a stack
@@ -192,9 +255,10 @@ class Camera:
             masks_tv = target['masks']
 
         # Assemble the target dictionary
-        target_new = {}
+        target_new = target.copy()
         target_new['boxes'] = boxes_tv
         target_new['masks'] = masks_tv
-        target_new['labels'] = target['labels']
 
         return target_new
+
+

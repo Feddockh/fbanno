@@ -89,7 +89,7 @@ def transform_frame(pts3d_list: List[np.ndarray], R: np.ndarray, t: np.ndarray) 
         transformed.append(pts_transformed)
     return transformed
 
-def project_to_image(pts3d_list: List[np.ndarray], K: np.ndarray) -> List[np.ndarray]:
+def project_to_plane(pts3d_list: List[np.ndarray], K: np.ndarray) -> List[np.ndarray]:
     """
     Project a list of point clouds into the image plane using the camera intrinsics.
 
@@ -106,3 +106,34 @@ def project_to_image(pts3d_list: List[np.ndarray], K: np.ndarray) -> List[np.nda
         uv = uv_h[:, :2] / uv_h[:, [2]]
         projected.append(uv)
     return projected
+
+def uvs_to_masks(uvs: List[np.ndarray], H: int, W: int) -> torch.Tensor:
+    """
+    Convert a list of 2D points to binary masks.
+
+    Args:
+        uvs: list of (Ni×2) numpy arrays of 2D points.
+        H:   height of the image.
+        W:   width of the image.
+
+    Returns:
+        masks: torch.uint8 tensor of shape (N, H, W) with binary masks.
+    """
+    masks = []
+    for uv in uvs:
+        # Create a mask for each set of points
+        mask = torch.zeros((H, W), dtype=torch.uint8)
+        us = torch.tensor(uv[:, 0].astype(int), dtype=torch.long)
+        vs = torch.tensor(uv[:, 1].astype(int), dtype=torch.long)
+
+        # Ensure the points are within the image bounds
+        us = torch.clamp(us, 0, W - 1)
+        vs = torch.clamp(vs, 0, H - 1)
+
+        # Fill the mask
+        mask[vs, us] = True
+        masks.append(mask)
+
+    # Stack the masks into a single tensor
+    masks = torch.stack(masks, dim=0) if masks else torch.empty((0, H, W), dtype=torch.uint8)
+    return masks

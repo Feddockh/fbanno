@@ -31,6 +31,7 @@ class MultiCamDataset(Dataset):
         """
         self.base_dir = base_dir
         self.cameras = cameras
+        self.set_type = set_type
         self.transforms = transforms
         self.annotations: Dict[str, COCO] = {}
 
@@ -55,7 +56,7 @@ class MultiCamDataset(Dataset):
                     raise ValueError(f"Annotations file {cam0_annotations_path} does not exist.")
                 
                 # Copy the cam0 annotations file to the current camera directory (removing annotations, and updating width/height)
-                cam_annotations_path = coco_anno_copy(cam0_annotations_path, cam_dir, cam)
+                cam_annotations_path = self._coco_annos_copy(cam0_annotations_path, cam_dir, cam)
             self.annotations[cam.name] = COCO(cam_annotations_path)
 
         # Load the image ids from the first camera (should be the same for all cameras)
@@ -164,7 +165,7 @@ class MultiCamDataset(Dataset):
                 'labels': labels_tensor
             }
 
-            # Add grid lines to the image for visualization
+            # # Add grid lines to the image for visualization
             # spacing = img.shape[1] // 10
             # img[:, ::spacing, :] = 1.0; img[:, :, ::spacing] = 1.0
 
@@ -193,6 +194,39 @@ class MultiCamDataset(Dataset):
         sample = self._filter_invalid_targets(sample)
         return sample
     
+    def _coco_annos_copy(self, input_json_path: str,
+                    output_dir: str,
+                    cam: Camera) -> str:
+        """
+        Copy a COCO-format annotations file, adjust width/height for images
+        of a given camera, and remove all annotations.
+
+        Args:
+            input_json_path: Path to original COCO annotations.json.
+            output_dir:      Directory to write the new annotations.json.
+            cam:             Camera object for camera name, width, and height.
+
+        Returns:
+            The path to the new annotations file.
+        """
+        os.makedirs(output_dir, exist_ok=True)
+
+        with open(input_json_path, 'r') as f:
+            coco = json.load(f)
+
+        # Adjust width/height on images for this camera
+        for img in coco.get("images"):
+            img["width"] = cam.width
+            img["height"] = cam.height
+
+        # Remove all annotations
+        coco["annotations"] = []
+
+        out_path = os.path.join(output_dir, os.path.basename(input_json_path))
+        with open(out_path, 'w') as f:
+            json.dump(coco, f, indent=2)
+        return out_path
+    
     def _filter_invalid_targets(self, sample: Dict[str, Tuple[Image, Dict[str, torch.Tensor]]]) \
              -> Dict[str, Tuple[Image, Dict[str, torch.Tensor]]]:
         """
@@ -217,88 +251,74 @@ class MultiCamDataset(Dataset):
         """
         return self.class_names
 
-def coco_anno_copy(input_json_path: str,
-                   output_dir: str,
-                   cam: Camera) -> str:
-    """
-    Copy a COCO-format annotations file, adjust width/height for images
-    of a given camera, and remove all annotations.
+    def save_annos_coco(self, image_id: int, target: Dict[str, torch.Tensor], cam: Camera):
+        """
+        Append the boxes+labels in `target` for `image_id` into the COCO JSON
+        at the cam annotation path. Uses the IDs in `target['ids']` as the annotation
+        IDs.
 
-    Args:
-        input_json_path: Path to original COCO annotations.json.
-        output_dir:      Directory to write the new annotations.json.
-        cam:             Camera object for camera name, width, and height.
+        Args:
+            image_id:             the COCO image_id to annotate (1-indexed).
+            target:               dict with keys:
+                                    - 'boxes' (Tensor[N,4] XYXY),
+                                    - 'labels' (Tensor[N], category IDs),
+                                    - 'ids' (Tensor[N], annotation IDs to reuse).
+            cam:                  the camera object for the current camera.
+        """
+        # If the cam is the first camera, throw an error
+        if cam == self.cameras[0]:
+            raise ValueError("Cannot save annotations for the first camera.")
+        
+        coco: COCO = self.annotations[cam.name]
+        dataset_dict = coco.dataset  # Plain Python dict
 
-    Returns:
-        The path to the new annotations file.
-    """
-    os.makedirs(output_dir, exist_ok=True)
+        # Ensure there's an annotations list
+        anns_list = dataset_dict.get('annotations', [])
 
-    with open(input_json_path, 'r') as f:
-        coco = json.load(f)
+        # Get the boxes, labels, and ids from the target
+        boxes  = target['boxes'].tolist()
+        labels = target['labels'].tolist()
+        ids    = target['ids'].tolist()
 
-    # Adjust width/height on images for this camera
-    for img in coco.get("images"):
-        img["width"] = cam.width
-        img["height"] = cam.height
+        # Save new annotations
+        # TODO: Handle case where boxes are empty
+        for box, cat, ann_id in zip(boxes, labels, ids):
 
-    # Remove all annotations
-    coco["annotations"] = []
+            # Convert the bbox from XYXY to XYWH format and compute the area
+            x1, y1, x2, y2 = box
+            w = x2 - x1
+            h = y2 - y1
+            area = w * h
 
-    out_path = os.path.join(output_dir, os.path.basename(input_json_path))
-    with open(out_path, 'w') as f:
-        json.dump(coco, f, indent=2)
-    return out_path
+            # If the annotation ID already exists, reuse it
+            ann = {
+                'id'         : int(ann_id),
+                'image_id'   : image_id,
+                'category_id': int(cat),
+                'segmentation': [],
+                'bbox'       : [x1, y1, w, h],
+                'area'       : area,
+                'iscrowd'    : 0,
+            }
+            
+            # Add the annotation to the list of annotations, or update it if it already exists
+            updated = False
+            for i, a in enumerate(anns_list):
+                if a['id'] == ann_id:
+                    anns_list[i] = ann
+                    updated = True
+                    break
+            # If the annotation ID does not exist, add it to the list
+            if not updated:
+                anns_list.append(ann)
 
-def save_annotations_coco(cam_annotations_path: str, image_id: int,
-    target: Dict[str, torch.Tensor], start_id: int = None):
-    """
-    Append the boxes+labels in `target` for `image_id` into the COCO JSON
-    at `cam_annotations_path`.  Backs up the original JSON to .bak.
+        # Put it back on the dataset dict
+        dataset_dict['annotations'] = anns_list
 
-    Args:
-        cam_annotations_path: path to the camera’s annotations JSON.
-        image_id:             the COCO image_id to annotate.
-        target:               dict with keys 'boxes' (Tensor[N,4] XYXY),
-                              'labels' (Tensor[N], category IDs).
-        start_id:             if provided, the first annotation ID to use.
-                              Otherwise picks max(existing IDs)+1.
-    """
-    # Load existing
-    with open(cam_annotations_path, 'r') as f:
-        coco = json.load(f)
-
-    anns      = coco.setdefault('annotations', [])
-    existing  = [a['id'] for a in anns]
-    next_ann  = (max(existing)+1 if existing and start_id is None else (start_id or 1))
-
-    boxes = target['boxes'].tolist()
-    labels = target['labels'].tolist()
-
-    # Append new annotations
-    for bbox, cat in zip(boxes, labels):
-        x1, y1, x2, y2 = bbox
-        w = x2 - x1
-        h = y2 - y1
-        area = w * h
-        ann = {
-            'id'         : next_ann,
-            'image_id'   : image_id,
-            'category_id': int(cat),
-            'bbox'       : [x1, y1, w, h],
-            'area'       : area,
-            'iscrowd'    : 0
-            # 'segmentation': … (optional RLE or polygon)
-        }
-        anns.append(ann)
-        next_ann += 1
-
-    # Backup + write
-    # bak = cam_annotations_path + '.bak'
-    # os.replace(cam_annotations_path, bak)
-    with open(cam_annotations_path, 'w') as f:
-        json.dump(coco, f, indent=2)
-    print(f"→ Saved {len(boxes)} ann(s) to {cam_annotations_path}")
+        # Write out the updated JSON
+        cam_annotations_path = os.path.join(self.base_dir, cam.name, self.set_type + ".json")
+        with open(cam_annotations_path, 'w') as f:
+            json.dump(dataset_dict, f, indent=2)
     
 def demo():
     # Create the cameras
@@ -332,6 +352,12 @@ def demo():
     img0_rect, tgt0_rect, _ = dataset_rect[view_idx][cam0.name]
     print(f"Rectified image shape: {img0_rect.shape}")
     plot([[(img, target)], [(img0_rect, tgt0_rect)]], row_title=["Original Image", "Rectified Image"])
+
+    # Show the undistorted/retified image and the re-distorted/un-rectified image
+    img0_unrect = cam0.undistort_rectify_image(img0_rect, inverse=True)
+    tgt0_unrect = cam0.undistort_rectify_target(tgt0_rect, inverse=True)
+    print(f"Unrectified image shape: {img0_unrect.shape}")
+    plot([[(img0_rect, tgt0_rect)], [(img0_unrect, tgt0_unrect)], [(img, target)]], row_title=["Rectified Image", "Unrectified Image", "Original Image"])
 
 if __name__ == '__main__':
     demo()
