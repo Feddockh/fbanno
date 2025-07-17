@@ -4,14 +4,15 @@ import torch
 from tqdm import tqdm
 
 from utils.camera import Camera
-from dataset import MultiCamDataset, SetType
+from dataset import YoloMultiCamDataset, SetType
 from utils.utils import masks_to_boxes
 from predictors import SAM2Predictor, FoundationStereoPredictor
 from components import sample_frame, unproject_masks_to_3d, radius_outlier_filter, \
     transform_frame, project_to_plane, uvs_to_masks
 
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rivendale_dataset")
+# DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rivendale_dataset")
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yolo_dataset")
 
 def process_frame(idx, cams, dataset, sam_predictor, fs_predictor):
     # Sample an image from the dataset
@@ -76,7 +77,7 @@ def process_frame(idx, cams, dataset, sam_predictor, fs_predictor):
     x_target_new = cams[2].undistort_rectify_target(x_target_new, inverse=True)
 
     # Save the annotations to a file
-    dataset.save_annos_coco(image_id=idx+1, target=x_target_new, cam=cams[2])
+    dataset.save_annos(image_id=idx+1, target=x_target_new, cam=cams[2])
 
 if __name__ == '__main__':
     # Set up cameras once
@@ -96,7 +97,7 @@ if __name__ == '__main__':
     )
 
     # Create dataset
-    dataset = MultiCamDataset(DATA_DIR, cams, set_type=SetType.ALL, undistort_rectify=True)
+    dataset = YoloMultiCamDataset(DATA_DIR, cams, set_type=SetType.TRAIN, undistort_rectify=True)
 
     # Iterate with tqdm
     for idx in tqdm(range(len(dataset)), desc="Processing frames"):

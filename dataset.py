@@ -5,7 +5,7 @@ from typing import List, Dict, Tuple
 from pycocotools.coco import COCO
 import torch
 from torch.utils.data import Dataset
-from torchvision.io import decode_image
+from torchvision.io import decode_image, read_image
 from torchvision.transforms import v2
 from torchvision.transforms.v2 import functional as F
 from torchvision.tv_tensors import Image, BoundingBoxes, BoundingBoxFormat, Mask
@@ -14,16 +14,131 @@ from utils.visual import plot
 
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rivendale_dataset")
-# DATA_DIR = os.path.join(BASE_DIR, "erwiam_dataset")
+YOLO_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yolo_dataset")
 
 class SetType:
-    ALL = "annotations"
     TRAIN = "train"
     VAL = "val"
+    TEST = "test"
 
-class MultiCamDataset(Dataset):
+class YoloMultiCamDataset(Dataset):
+    def __init__(self, base_dir: str, cameras: List[Camera], set_type: SetType = SetType.TRAIN, transforms=None, undistort_rectify: bool = False):
+        self.base_dir = base_dir
+        self.cameras = cameras
+        self.set_type = set_type
+        self.transforms = transforms
+        self.undistort_rectify = undistort_rectify
+
+        # Load the image filenames from the set type file
+        set_file = os.path.join(base_dir, f"{set_type}.txt")
+        if not os.path.exists(set_file):
+            raise FileNotFoundError(f"Set file {set_file} does not exist.")
+        
+        with open(set_file, "r") as f:
+            self.image_filenames = [line.strip() for line in f.readlines()]
+            self.image_filenames = sorted(self.image_filenames)
+
+        # Load class names
+        classes_file = os.path.join(base_dir, "classes.txt")
+        if os.path.exists(classes_file):
+            with open(classes_file, "r") as f:
+                self.class_names = [line.strip() for line in f.readlines()]
+        else:
+            raise FileNotFoundError(f"Classes file \"{classes_file}\" does not exist.")
+        
+    def __len__(self):
+        return len(self.image_filenames)
+
+    def __getitem__(self, idx) -> Dict[str, Tuple[Image, Dict[str, torch.Tensor], str]]:
+        sample = {}
+        img_filename = self.image_filenames[idx]
+
+        for cam in self.cameras:
+            cam_dir = os.path.join(self.base_dir, cam.name)
+            img_path = os.path.join(cam_dir, "images", img_filename)
+            label_path = os.path.join(cam_dir, "labels", os.path.splitext(img_filename)[0] + ".txt")
+
+            # Load image
+            img = read_image(img_path)  # [C, H, W], uint8
+            img = F.to_dtype(img, dtype=torch.float32, scale=True)
+            canvas_size = (img.shape[1], img.shape[2])  # (H, W)
+
+            # Load YOLO boxes
+            boxes = []
+            labels = []
+
+            if os.path.exists(label_path):
+                with open(label_path, "r") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) != 5:
+                            continue
+                        cls, xc, yc, w, h = map(float, parts)
+                        labels.append(int(cls))
+                        x = xc * canvas_size[1] - (w * canvas_size[1]) / 2
+                        y = yc * canvas_size[0] - (h * canvas_size[0]) / 2
+                        boxes.append([x, y, w * canvas_size[1], h * canvas_size[0]])
+
+            if boxes:
+                boxes_tensor = torch.tensor(boxes, dtype=torch.float32)
+                boxes_tv = BoundingBoxes(boxes_tensor, format=BoundingBoxFormat.XYWH, canvas_size=canvas_size)
+                boxes_tv = F.convert_bounding_box_format(boxes_tv, new_format=BoundingBoxFormat.XYXY)
+                labels_tensor = torch.tensor(labels, dtype=torch.int64)
+            else:
+                boxes_tv = BoundingBoxes(torch.empty((0, 4), dtype=torch.float32),
+                                         format=BoundingBoxFormat.XYXY,
+                                         canvas_size=canvas_size)
+                labels_tensor = torch.empty((0,), dtype=torch.int64)
+
+            target = {
+                "boxes": boxes_tv,
+                "labels": labels_tensor,
+                "masks": Mask(torch.empty((0, canvas_size[0], canvas_size[1]), dtype=torch.uint8)),
+            }
+
+            # If the undistort_rectify flag is set, undistort and rectify the image and annotations
+            if self.undistort_rectify:
+                img = cam.undistort_rectify_image(img)
+                target = cam.undistort_rectify_target(target)
+
+            if self.transforms:
+                img, target = self.transforms(img, target)
+
+            sample[cam.name] = (img, target, img_path)
+
+        return filter_invalid_targets(self, sample)
+
+    def get_class_names(self):
+        return self.class_names
+    
+    def save_annos(self, image_id: int, target: Dict[str, torch.Tensor], cam: Camera):
+        """
+        Save the annotations in YOLO format for the given camera.
+        
+        Args:
+            image_id: The image ID (1-indexed).
+            target: A dictionary with keys 'boxes' and 'labels'.
+            cam: The camera object for the current camera.
+        """
+        cam_dir = os.path.join(self.base_dir, cam.name)
+        label_path = os.path.join(cam_dir, "labels", f"{image_id}.txt")
+        os.makedirs(os.path.dirname(label_path), exist_ok=True)
+
+        with open(label_path, 'w') as f:
+            boxes = target['boxes'].unbind(dim=1)
+            labels = target['labels'].tolist()
+            for box, label in zip(boxes, labels):
+                x1, y1, x2, y2 = box.tolist()
+                xc = (x1 + x2) / 2 / cam.width
+                yc = (y1 + y2) / 2 / cam.height
+                w = (x2 - x1) / cam.width
+                h = (y2 - y1) / cam.height
+                f.write(f"{label} {xc} {yc} {w} {h}\n")
+
+
+class COCOMultiCamDataset(Dataset):
     def __init__(self, base_dir: str, cameras: List[Camera], 
-                 set_type: SetType = SetType.ALL, transforms = None, 
+                 set_type: SetType = SetType.TRAIN, transforms = None, 
                  undistort_rectify: bool = False):
         """
         Initialize the multi-cam dataset with the base directory and camera names.
@@ -191,7 +306,7 @@ class MultiCamDataset(Dataset):
             sample[cam.name] = (img, target, img_path)
 
         # Filter out invalid targets
-        sample = self._filter_invalid_targets(sample)
+        sample = filter_invalid_targets(self, sample)
         return sample
     
     def _coco_annos_copy(self, input_json_path: str,
@@ -227,31 +342,13 @@ class MultiCamDataset(Dataset):
             json.dump(coco, f, indent=2)
         return out_path
     
-    def _filter_invalid_targets(self, sample: Dict[str, Tuple[Image, Dict[str, torch.Tensor]]]) \
-             -> Dict[str, Tuple[Image, Dict[str, torch.Tensor]]]:
-        """
-        Remove any annotation whose box has <=0 area in ANY camera
-        """
-        for cam in self.cameras:
-            img, target, img_path = sample[cam.name]
-            boxes = target['boxes']
-            x1, y1, x2, y2 = boxes.unbind(dim=1)
-            keep = (x2 - x1) * (y2 - y1) > 0
-            boxes = boxes[keep]
-            masks = target['masks'][keep] if target['masks'].shape[0] > 0 else target['masks']
-            labels = target['labels'][keep]
-            ids = target['ids'][keep]
-            sample[cam.name] = (img, {'boxes': boxes, 'masks': masks, 'labels': labels, 'ids': ids}, img_path)
-
-        return sample
-    
     def get_class_names(self):
         """
         Get the class names for this dataset.
         """
         return self.class_names
 
-    def save_annos_coco(self, image_id: int, target: Dict[str, torch.Tensor], cam: Camera):
+    def save_annos(self, image_id: int, target: Dict[str, torch.Tensor], cam: Camera):
         """
         Append the boxes+labels in `target` for `image_id` into the COCO JSON
         at the cam annotation path. Uses the IDs in `target['ids']` as the annotation
@@ -319,6 +416,23 @@ class MultiCamDataset(Dataset):
         cam_annotations_path = os.path.join(self.base_dir, cam.name, self.set_type + ".json")
         with open(cam_annotations_path, 'w') as f:
             json.dump(dataset_dict, f, indent=2)
+
+def filter_invalid_targets(dataset, sample: Dict[str, Tuple[Image, Dict[str, torch.Tensor]]]) \
+            -> Dict[str, Tuple[Image, Dict[str, torch.Tensor]]]:
+    """
+    Remove any annotation whose box has <=0 area in ANY camera
+    """
+    for cam in dataset.cameras:
+        img, target, img_path = sample[cam.name]
+        boxes = target['boxes']
+        x1, y1, x2, y2 = boxes.unbind(dim=1)
+        keep = (x2 - x1) * (y2 - y1) > 0
+        boxes = boxes[keep]
+        masks = target['masks'][keep] if target['masks'].shape[0] > 0 else target['masks']
+        labels = target['labels'][keep]
+        sample[cam.name] = (img, {'boxes': boxes, 'masks': masks, 'labels': labels}, img_path)
+
+    return sample
     
 def demo():
     # Create the cameras
@@ -335,7 +449,7 @@ def demo():
     ])
 
     # Create the dataset
-    dataset = MultiCamDataset(DATA_DIR, cameras, set_type=SetType.ALL, transforms=transforms)
+    dataset = YoloMultiCamDataset(YOLO_DATA_DIR, cameras, set_type=SetType.TRAIN, transforms=transforms)
     view_idx = 170 # Make sure this index is valid for your dataset
     img, target, img_path = dataset[view_idx][cam0.name] 
 
@@ -348,7 +462,7 @@ def demo():
     plot([(img, target)])
 
     # Show rectified image
-    dataset_rect = MultiCamDataset(DATA_DIR, cameras, set_type=SetType.ALL, transforms=transforms, undistort_rectify=True)
+    dataset_rect = YoloMultiCamDataset(YOLO_DATA_DIR, cameras, set_type=SetType.TRAIN, transforms=transforms, undistort_rectify=True)
     img0_rect, tgt0_rect, _ = dataset_rect[view_idx][cam0.name]
     print(f"Rectified image shape: {img0_rect.shape}")
     plot([[(img, target)], [(img0_rect, tgt0_rect)]], row_title=["Original Image", "Rectified Image"])

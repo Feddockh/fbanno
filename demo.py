@@ -13,7 +13,7 @@ from components import sample_frame, unproject_masks_to_3d, radius_outlier_filte
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rivendale_dataset")
 
-def demo(idx=170):
+def demo(idx=5):
     # Create the cameras
     firefly_left, firefly_right, ximea = Camera("firefly_left"), Camera("firefly_right"), Camera("ximea")
     cams = [firefly_left, firefly_right, ximea]
@@ -50,7 +50,7 @@ def demo(idx=170):
     # Get the depth map from the FoundationStereo predictor
     K = firefly_left.camera_matrix
     b = np.abs(firefly_left.transforms["firefly_right"][1][0])
-    depth_map = fs_predictor.predict_depth(l_img, r_img, focal_length=K[0,0], baseline=b, scale=0.8, vis=False)
+    depth_map = fs_predictor.predict_depth(l_img, r_img, focal_length=K[0,0], baseline=b, scale=0.8, vis=True)
 
     # Get the masked list of points in 3D using the depth map
     pts3d = unproject_masks_to_3d(l_masks, depth_map, K)
