@@ -111,23 +111,24 @@ class YoloMultiCamDataset(Dataset):
     def get_class_names(self):
         return self.class_names
     
-    def save_annos(self, image_id: int, target: Dict[str, torch.Tensor], cam: Camera):
+    def save_annos(self, filename: int, target: Dict[str, torch.Tensor], cam: Camera):
         """
         Save the annotations in YOLO format for the given camera.
         
         Args:
-            image_id: The image ID (1-indexed).
+            filename: The image filename (without extension).
             target: A dictionary with keys 'boxes' and 'labels'.
             cam: The camera object for the current camera.
         """
         cam_dir = os.path.join(self.base_dir, cam.name)
-        label_path = os.path.join(cam_dir, "labels", f"{image_id}.txt")
+        label_path = os.path.join(cam_dir, "labels", filename + ".txt")
         os.makedirs(os.path.dirname(label_path), exist_ok=True)
 
         with open(label_path, 'w') as f:
-            boxes = target['boxes'].unbind(dim=1)
+            boxes = target['boxes']
             labels = target['labels'].tolist()
             for box, label in zip(boxes, labels):
+                print(box.tolist())
                 x1, y1, x2, y2 = box.tolist()
                 xc = (x1 + x2) / 2 / cam.width
                 yc = (y1 + y2) / 2 / cam.height

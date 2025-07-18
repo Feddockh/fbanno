@@ -16,7 +16,7 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yolo_datase
 
 def process_frame(idx, cams, dataset, sam_predictor, fs_predictor):
     # Sample an image from the dataset
-    (l_img, l_target, _), (r_img, _, _), (x_img, x_target, _) = sample_frame(dataset, idx, cams)
+    (l_img, l_target, _), (r_img, _, _), (x_img, x_target, x_img_path) = sample_frame(dataset, idx, cams)
 
     # Check if the left image is empty
     if len(l_target['boxes']) == 0:
@@ -77,7 +77,9 @@ def process_frame(idx, cams, dataset, sam_predictor, fs_predictor):
     x_target_new = cams[2].undistort_rectify_target(x_target_new, inverse=True)
 
     # Save the annotations to a file
-    dataset.save_annos(image_id=idx+1, target=x_target_new, cam=cams[2])
+    img_name = os.path.splitext(os.path.basename(x_img_path))[0]
+    print(f"Saving annotations for {img_name}.txt")
+    dataset.save_annos(img_name, target=x_target_new, cam=cams[2])
 
 if __name__ == '__main__':
     # Set up cameras once
@@ -97,7 +99,7 @@ if __name__ == '__main__':
     )
 
     # Create dataset
-    dataset = YoloMultiCamDataset(DATA_DIR, cams, set_type=SetType.TRAIN, undistort_rectify=True)
+    dataset = YoloMultiCamDataset(DATA_DIR, cams, set_type=SetType.VAL, undistort_rectify=True)
 
     # Iterate with tqdm
     for idx in tqdm(range(len(dataset)), desc="Processing frames"):
