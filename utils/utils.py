@@ -102,3 +102,16 @@ def masks_to_boxes(masks: torch.Tensor | np.ndarray) -> torch.Tensor:
         boxes.append([x1, y1, x2, y2])
 
     return torch.tensor(boxes).float()
+
+def box_area(boxes: torch.Tensor) -> torch.Tensor:
+    """
+    Computes the area of a set of bounding boxes, which are specified by their
+    (x1, y1, x2, y2) coordinates.
+
+    Args:
+        boxes (Tensor[N, 4]): boxes for which the area will be computed in (x1, y1, x2, y2) format
+
+    Returns:
+        area (Tensor[N]): area for each box
+    """
+    return (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])

@@ -260,5 +260,23 @@ class Camera:
         target_new['masks'] = masks_tv
 
         return target_new
+    
+    def copy(self) -> "Camera":
+        """
+        Create a deep copy of the Camera object including all its parameters.
+        """
+        new_cam = Camera(self.name)
+        new_cam.width = self.width
+        new_cam.height = self.height
+        new_cam.camera_matrix = self.camera_matrix.copy()
+        new_cam.dist_coeffs = self.dist_coeffs.copy()
+        new_cam.rectification_matrix = self.rectification_matrix.copy()
+        new_cam.projection_matrix = self.projection_matrix.copy()
+        new_cam.transforms = {k: (v[0].copy(), v[1].copy()) for k, v in self.transforms.items()}
+        new_cam.map1 = self.map1.copy() if self.map1 is not None else None
+        new_cam.map2 = self.map2.copy() if self.map2 is not None else None
+        new_cam.inv_map1 = self.inv_map1.copy() if self.inv_map1 is not None else None
+        new_cam.inv_map2 = self.inv_map2.copy() if self.inv_map2 is not None else None
+        return new_cam
 
 

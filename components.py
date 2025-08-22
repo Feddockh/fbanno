@@ -43,33 +43,44 @@ def unproject_masks_to_3d(masks: torch.Tensor, depth_map: np.ndarray,
 
     return pts3d_list
 
-def radius_outlier_filter(pts3d_list: List[np.ndarray],
-    radius: float, min_neighbors: int) -> List[np.ndarray]:
+def radius_outlier_filter(pts3d, radius=0.01, min_neighbors=100):
     """
-    Apply Open3D radius outlier removal to each point cloud.
-
-    Args:
-        pts3d_list:    list of (Mi×3) numpy arrays.
-        radius:        radius within which to search for neighbors (in same units).
-        min_neighbors: minimum number of points within `radius` to keep a point.
-
-    Returns:
-        filtered:      list of (Ni×3) numpy arrays of the inlier points.
+    Filters a list of 3D point sets using a radius outlier filter.
     """
-    filtered = []
-    for pts in pts3d_list:
-        if pts.shape[0] == 0:
-            filtered.append(pts)
-            continue
-
+    # Create a list of filtered point sets
+    filtered_pts3d = []
+    for pts in pts3d:
+        # Create a PointCloud object
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(pts)
-        pcd_inliers, _ = pcd.remove_radius_outlier(
-            nb_points=min_neighbors,
-            radius=radius
-        )
-        filtered.append(np.asarray(pcd_inliers.points))
-    return filtered
+        
+        # Apply radius outlier removal
+        _, ind = pcd.remove_radius_outlier(nb_points=min_neighbors, radius=radius)
+        
+        # Add the filtered points to the list
+        filtered_pts3d.append(pts[ind])
+        
+    return filtered_pts3d
+
+def filter_points_by_distance(pts3d_per_mask, distance_threshold):
+    """
+    Filters points in each mask based on a distance threshold.
+    The distance is measured along the Z-axis in the camera coordinate system.
+    """
+    filtered_pts3d = []
+    for pts3d in pts3d_per_mask:
+        # The Z coordinate (depth) is the 3rd column
+        depth = pts3d[:, 2]
+        # Create a mask for points within the distance threshold
+        mask = depth <= distance_threshold
+        # Apply the mask
+        filtered_pts3d.append(pts3d[mask])
+    return filtered_pts3d
+
+def transform_frame(pts3d, R, t):
+    """
+    Transforms a list of 3D point sets to a new frame.
+    """
 
 def transform_frame(pts3d_list: List[np.ndarray], R: np.ndarray, t: np.ndarray) -> List[np.ndarray]:
     """

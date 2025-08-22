@@ -6,9 +6,10 @@ def copy_files_from_list(txt_file, src_folder, dst_folder):
     os.makedirs(dst_folder, exist_ok=True)
 
     with open(txt_file, 'r') as f:
-        file_names = [line.strip() for line in f if line.strip()]
+        file_paths = [line.strip() for line in f if line.strip()]
 
-    for file_name in file_names:
+    for file_path in file_paths:
+        file_name = os.path.basename(file_path)
         src_path = os.path.join(src_folder, file_name)
         dst_path = os.path.join(dst_folder, file_name)
 
@@ -20,8 +21,8 @@ def copy_files_from_list(txt_file, src_folder, dst_folder):
 
 if __name__ == "__main__":
     # Example usage
-    txt_file = "yolo_dataset/test.txt"
+    txt_file = "datasets/rivendale_v5/train.txt"
     src_folder = "/media/hayden/T7/fireblight/data/rivendale_2-12-2025/image_data/firefly_right"
-    dst_folder = "/home/hayden/cmu/kantor_lab/fbanno/yolo_dataset/firefly_right/images/"
-    
+    dst_folder = "/home/hayden/cmu/kantor_lab/fb_models/fb_reproject/datasets/rivendale_v5/firefly_right/images/train"
+
     copy_files_from_list(txt_file, src_folder, dst_folder)

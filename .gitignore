@@ -1,4 +1,5 @@
 __pycache__/
-/rivendale_dataset
-/FoundationStereo/pretrained_models/
-/yolo_dataset
+rivendale_dataset
+FoundationStereo/pretrained_models/
+yolo_dataset
+datasets

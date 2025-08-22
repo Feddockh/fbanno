@@ -4,7 +4,7 @@ import torch
 from tqdm import tqdm
 
 from utils.camera import Camera
-from dataset import YoloMultiCamDataset, SetType
+from dataset import YoloMultiCamDataset, SetType, YoloV5MultiCamDataset
 from utils.utils import masks_to_boxes
 from predictors import SAM2Predictor, FoundationStereoPredictor
 from components import sample_frame, unproject_masks_to_3d, radius_outlier_filter, \
@@ -12,7 +12,7 @@ from components import sample_frame, unproject_masks_to_3d, radius_outlier_filte
 
 
 # DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rivendale_dataset")
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yolo_dataset")
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "datasets", "rivendale_v5")
 
 def process_frame(idx, cams, dataset, sam_predictor, fs_predictor):
     # Sample an image from the dataset
@@ -99,7 +99,7 @@ if __name__ == '__main__':
     )
 
     # Create dataset
-    dataset = YoloMultiCamDataset(DATA_DIR, cams, set_type=SetType.VAL, undistort_rectify=True)
+    dataset = YoloV5MultiCamDataset(DATA_DIR, cams, set_type=SetType.VAL, undistort_rectify=True)
 
     # Iterate with tqdm
     for idx in tqdm(range(len(dataset)), desc="Processing frames"):
