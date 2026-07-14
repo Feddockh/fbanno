@@ -33,8 +33,15 @@ for current numbers):
 ```
 python3 evaluate.py --pred-dir outputs/reprojected_labels \
                     --gt-dir datasets/field_dataset_nir/labels/val \
-                    --class-names "Shepherds_Crook" "Canker"
+                    --class-names "Shepherds_Crook" "Canker" \
+                    --csv outputs/eval/val.csv
 ```
+
+`--csv <path>` writes the metrics table (one row per IoU threshold x class) to
+CSV, plus a second file (`<path>` with `_workload` inserted before the
+extension, e.g. `val.csv` -> `val_workload.csv`) with the human-fix workload
+table. `--json <path>` writes the same numbers plus run metadata as a single
+JSON file.
 
 Pass `--image-dir` to also generate side-by-side ground-truth/predicted
 comparison images (ground truth left, predictions right; handles both raw

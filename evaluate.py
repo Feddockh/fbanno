@@ -14,7 +14,11 @@ Example:
         --pred-dir datasets/rivendale_v6/ximea/labels/train \
         --gt-dir datasets/field_dataset_nir/labels/val \
         --iou-thresholds 0.25 0.5 0.75 \
-        --json results_val.json
+        --csv results_val.csv --json results_val.json
+
+--csv writes the metrics table to CSV (one row per IoU threshold x class), plus
+a second '<name>_workload.csv' with the human-fix workload table. --json writes
+the same numbers (plus run metadata) as a single JSON file.
 
 Pass --image-dir to also generate side-by-side ground-truth/predicted comparison
 images (ground truth left, predictions right), each filename prefixed with its
@@ -30,6 +34,7 @@ click-through viewer opens instead (Right/n = next, Left/p = prev, q/Esc = quit)
 """
 
 import argparse
+import csv
 import glob
 import json
 import os
@@ -330,6 +335,9 @@ def main():
     parser.add_argument("--class-names", type=str, nargs="+", default=None,
                         help="Optional class names indexed by class id")
     parser.add_argument("--json", type=str, default=None, help="Optional path to dump results as JSON")
+    parser.add_argument("--csv", type=str, default=None,
+                        help="Optional path to write the metrics table as CSV "
+                             "(the workload table is written alongside as '<name>_workload.csv')")
     parser.add_argument("--image-dir", type=str, default=None,
                         help="Directory of NIR images; if given, also generate GT-vs-predicted comparisons")
     parser.add_argument("--save-dir", type=str, default=None,
@@ -374,6 +382,7 @@ def main():
     print(header)
     print("-" * len(header))
     summary = {}
+    metrics_rows = []
     for t in args.iou_thresholds:
         for key in class_ids + ["all", "agnostic"]:
             stats = results[t][key]
@@ -383,6 +392,9 @@ def main():
                   f"{stats['tp']:>5} {stats['fp']:>5} {stats['fn']:>5}")
             summary[f"{t}/{name}"] = {"precision": p, "recall": r, "f1": f1, "mean_iou": miou,
                                       "tp": stats["tp"], "fp": stats["fp"], "fn": stats["fn"]}
+            metrics_rows.append({"iou_threshold": t, "class": name, "precision": p, "recall": r,
+                                 "f1": f1, "mean_iou": miou, "tp": stats["tp"], "fp": stats["fp"],
+                                 "fn": stats["fn"]})
         print("-" * len(header))
 
     fix_counts = workload(frames, args.iou_thresholds)
@@ -391,6 +403,7 @@ def main():
                f"{'% needs fixing':>15}")
     print(header2)
     print("-" * len(header2))
+    workload_rows = []
     for t in args.iou_thresholds:
         c = fix_counts[t]
         total = c["ok"] + c["adjust"] + c["add"] + c["delete"]
@@ -400,6 +413,21 @@ def main():
               f"{pct:>14.1f}%")
         summary[f"{t}/workload"] = {**c, "total": total,
                                     "pct_needs_fixing": round(pct, 2)}
+        workload_rows.append({"iou_threshold": t, "total": total, **c, "pct_needs_fixing": round(pct, 2)})
+
+    if args.csv:
+        with open(args.csv, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(metrics_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(metrics_rows)
+        print(f"Wrote {args.csv}")
+
+        workload_csv = os.path.splitext(args.csv)[0] + "_workload.csv"
+        with open(workload_csv, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(workload_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(workload_rows)
+        print(f"Wrote {workload_csv}")
 
     if args.json:
         summary["meta"] = {"pred_dir": args.pred_dir, "gt_dir": args.gt_dir,
