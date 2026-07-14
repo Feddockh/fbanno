@@ -36,11 +36,11 @@ class Camera:
             return self.name == value.name
         return False
 
-    def load_params(self):
+    def load_params(self, calib_dir: str = None):
         """
         Load the camera parameters from a YAML file.
         """
-        yaml_file = os.path.join(CALIBRATION_DIR, f"{self.name}.yaml")
+        yaml_file = os.path.join(calib_dir or CALIBRATION_DIR, f"{self.name}.yaml")
         if not os.path.exists(yaml_file):
             raise FileNotFoundError(f"Calibration file {yaml_file} not found.")
         with open(yaml_file, 'r') as f:

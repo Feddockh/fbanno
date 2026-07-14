@@ -22,6 +22,62 @@ class SetType:
     VAL = "val"
     TEST = "test"
 
+
+def load_yolo_target(label_path: str, canvas_size: Tuple[int, int]) -> Dict[str, torch.Tensor]:
+    """
+    Parse a YOLO-format label file (normalized `cls xc yc w h` per line) into a
+    target dict with XYXY-pixel 'boxes', 'labels', and an empty 'masks' tensor.
+    Returns an empty target if label_path doesn't exist.
+    """
+    boxes = []
+    labels = []
+
+    if label_path and os.path.exists(label_path):
+        with open(label_path, "r") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) != 5:
+                    continue
+                cls, xc, yc, w, h = map(float, parts)
+                labels.append(int(cls))
+                x = xc * canvas_size[1] - (w * canvas_size[1]) / 2
+                y = yc * canvas_size[0] - (h * canvas_size[0]) / 2
+                boxes.append([x, y, w * canvas_size[1], h * canvas_size[0]])
+
+    if boxes:
+        boxes_tensor = torch.tensor(boxes, dtype=torch.float32)
+        boxes_tv = BoundingBoxes(boxes_tensor, format=BoundingBoxFormat.XYWH, canvas_size=canvas_size)
+        boxes_tv = F.convert_bounding_box_format(boxes_tv, new_format=BoundingBoxFormat.XYXY)
+        labels_tensor = torch.tensor(labels, dtype=torch.int64)
+    else:
+        boxes_tv = BoundingBoxes(torch.empty((0, 4), dtype=torch.float32),
+                                 format=BoundingBoxFormat.XYXY,
+                                 canvas_size=canvas_size)
+        labels_tensor = torch.empty((0,), dtype=torch.int64)
+
+    return {
+        "boxes": boxes_tv,
+        "labels": labels_tensor,
+        "masks": Mask(torch.empty((0, canvas_size[0], canvas_size[1]), dtype=torch.uint8)),
+    }
+
+
+def write_yolo_labels(output_path: str, target: Dict[str, torch.Tensor], width: int, height: int):
+    """
+    Write a target's boxes/labels to a YOLO-format label file (normalized `cls xc yc w h`).
+    """
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, 'w') as f:
+        boxes = target['boxes']
+        labels = target['labels'].tolist()
+        for box, label in zip(boxes, labels):
+            x1, y1, x2, y2 = box.tolist()
+            xc = (x1 + x2) / 2 / width
+            yc = (y1 + y2) / 2 / height
+            w = (x2 - x1) / width
+            h = (y2 - y1) / height
+            f.write(f"{label} {xc} {yc} {w} {h}\n")
+
 class YoloV5MultiCamDataset(Dataset):
     def __init__(self, base_dir: str, cameras: List[Camera], set_type: SetType = SetType.TRAIN, transforms=None, undistort_rectify: bool = False):
         self.base_dir = base_dir
@@ -69,37 +125,7 @@ class YoloV5MultiCamDataset(Dataset):
             canvas_size = (img.shape[1], img.shape[2])  # (H, W)
 
             # Load YOLO boxes
-            boxes = []
-            labels = []
-
-            if os.path.exists(label_path):
-                with open(label_path, "r") as f:
-                    for line in f:
-                        parts = line.strip().split()
-                        if len(parts) != 5:
-                            continue
-                        cls, xc, yc, w, h = map(float, parts)
-                        labels.append(int(cls))
-                        x = xc * canvas_size[1] - (w * canvas_size[1]) / 2
-                        y = yc * canvas_size[0] - (h * canvas_size[0]) / 2
-                        boxes.append([x, y, w * canvas_size[1], h * canvas_size[0]])
-
-            if boxes:
-                boxes_tensor = torch.tensor(boxes, dtype=torch.float32)
-                boxes_tv = BoundingBoxes(boxes_tensor, format=BoundingBoxFormat.XYWH, canvas_size=canvas_size)
-                boxes_tv = F.convert_bounding_box_format(boxes_tv, new_format=BoundingBoxFormat.XYXY)
-                labels_tensor = torch.tensor(labels, dtype=torch.int64)
-            else:
-                boxes_tv = BoundingBoxes(torch.empty((0, 4), dtype=torch.float32),
-                                         format=BoundingBoxFormat.XYXY,
-                                         canvas_size=canvas_size)
-                labels_tensor = torch.empty((0,), dtype=torch.int64)
-
-            target = {
-                "boxes": boxes_tv,
-                "labels": labels_tensor,
-                "masks": Mask(torch.empty((0, canvas_size[0], canvas_size[1]), dtype=torch.uint8)),
-            }
+            target = load_yolo_target(label_path, canvas_size)
 
             # If the undistort_rectify flag is set, undistort and rectify the image and annotations
             if self.undistort_rectify:
@@ -132,18 +158,76 @@ class YoloV5MultiCamDataset(Dataset):
             output_dir = os.path.join(self.base_dir, cam.name, "labels", self.set_type)
         filename = os.path.splitext(os.path.basename(filepath))[0]
         label_path = os.path.join(output_dir, filename + ".txt")
-        os.makedirs(output_dir, exist_ok=True)
+        write_yolo_labels(label_path, target, cam.width, cam.height)
 
-        with open(label_path, 'w') as f:
-            boxes = target['boxes']
-            labels = target['labels'].tolist()
-            for box, label in zip(boxes, labels):
-                x1, y1, x2, y2 = box.tolist()
-                xc = (x1 + x2) / 2 / cam.width
-                yc = (y1 + y2) / 2 / cam.height
-                w = (x2 - x1) / cam.width
-                h = (y2 - y1) / cam.height
-                f.write(f"{label} {xc} {yc} {w} {h}\n")
+
+class ReprojectionDataset(Dataset):
+    """
+    Multi-modality dataset built from independent flat image directories (one per
+    camera) instead of a shared multi-cam dataset root. Only the first camera
+    (the RGB annotation source) reads labels; the others are loaded image-only.
+
+    Frames are matched by image basename across rgb_dir/right_dir/nir_dir; any
+    rgb_dir image missing from right_dir or nir_dir is skipped with a warning.
+    """
+    def __init__(self, rgb_dir: str, rgb_labels_dir: str, right_dir: str, nir_dir: str,
+                 cameras: List[Camera], undistort_rectify: bool = False):
+        self.rgb_dir = rgb_dir
+        self.rgb_labels_dir = rgb_labels_dir
+        self.right_dir = right_dir
+        self.nir_dir = nir_dir
+        self.cameras = cameras
+        self.undistort_rectify = undistort_rectify
+
+        rgb_files = sorted(f for f in os.listdir(rgb_dir) if os.path.splitext(f)[1].lower() == ".png")
+        self.image_filenames = []
+        for f in rgb_files:
+            if not os.path.exists(os.path.join(right_dir, f)):
+                print(f"Skipping {f}: not found in {right_dir}")
+                continue
+            if not os.path.exists(os.path.join(nir_dir, f)):
+                print(f"Skipping {f}: not found in {nir_dir}")
+                continue
+            self.image_filenames.append(f)
+
+    def __len__(self):
+        return len(self.image_filenames)
+
+    def _load_cam(self, cam: Camera, image_dir: str, image_filename: str, label_path: str = None):
+        img_path = os.path.join(image_dir, image_filename)
+        img = read_image(img_path)  # [C, H, W], uint8
+        img = F.to_dtype(img, dtype=torch.float32, scale=True)
+        canvas_size = (img.shape[1], img.shape[2])  # (H, W)
+
+        target = load_yolo_target(label_path, canvas_size)
+
+        if self.undistort_rectify:
+            img = cam.undistort_rectify_image(img)
+            target = cam.undistort_rectify_target(target)
+
+        return img, target, img_path
+
+    def __getitem__(self, idx) -> Dict[str, Tuple[Image, Dict[str, torch.Tensor], str]]:
+        image_filename = self.image_filenames[idx]
+        rgb_cam, right_cam, nir_cam = self.cameras
+
+        label_filename = os.path.splitext(image_filename)[0] + ".txt"
+        rgb_label_path = os.path.join(self.rgb_labels_dir, label_filename)
+
+        sample = {
+            rgb_cam.name: self._load_cam(rgb_cam, self.rgb_dir, image_filename, rgb_label_path),
+            right_cam.name: self._load_cam(right_cam, self.right_dir, image_filename),
+            nir_cam.name: self._load_cam(nir_cam, self.nir_dir, image_filename),
+        }
+        return filter_invalid_targets(self, sample)
+
+    def save_annos(self, filepath: str, target: Dict[str, torch.Tensor], cam: Camera, output_dir: str):
+        """
+        Save the annotations in YOLO format for the given camera to output_dir.
+        """
+        filename = os.path.splitext(os.path.basename(filepath))[0]
+        label_path = os.path.join(output_dir, filename + ".txt")
+        write_yolo_labels(label_path, target, cam.width, cam.height)
 
 
 class YoloMultiCamDataset(Dataset):

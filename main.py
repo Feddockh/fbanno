@@ -5,7 +5,7 @@ import torch
 from tqdm import tqdm
 
 from utils.camera import Camera
-from dataset import SetType, YoloV5MultiCamDataset
+from dataset import ReprojectionDataset
 from utils.utils import masks_to_boxes
 from predictors import SAM2Predictor, FoundationStereoPredictor
 from components import sample_frame, unproject_masks_to_3d, radius_outlier_filter, \
@@ -13,7 +13,6 @@ from components import sample_frame, unproject_masks_to_3d, radius_outlier_filte
 
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(REPO_DIR, "datasets", "rivendale_v6")
 
 def process_frame(idx, cams, dataset, sam_predictor, fs_predictor, output_dir):
     # Sample an image from the dataset
@@ -84,9 +83,14 @@ def process_frame(idx, cams, dataset, sam_predictor, fs_predictor, output_dir):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Reproject RGB annotations onto the NIR (ximea) camera.")
-    parser.add_argument("--data-dir", default=DATA_DIR, help="Multi-cam YOLO dataset root")
+    parser.add_argument("--rgb-dir", required=True, help="Directory of RGB (firefly_left) images")
+    parser.add_argument("--rgb-labels-dir", required=True, help="Directory of RGB YOLO label files (source annotations)")
+    parser.add_argument("--right-dir", required=True, help="Directory of stereo-right (firefly_right) images")
+    parser.add_argument("--nir-dir", required=True, help="Directory of NIR (ximea) images")
     parser.add_argument("--output-dir", default=os.path.join(REPO_DIR, "outputs", "reprojected_labels"),
-                        help="Directory to write the reprojected ximea YOLO labels to")
+                        help="Directory to write the reprojected NIR YOLO labels to")
+    parser.add_argument("--calib-dir", default=None,
+                        help="Directory of camera calibration YAMLs (default: repo's calibration_files/)")
     parser.add_argument("--limit", type=int, default=None, help="Only process the first N frames")
     args = parser.parse_args()
 
@@ -96,7 +100,7 @@ if __name__ == '__main__':
     ximea         = Camera("ximea")
     cams = [firefly_left, firefly_right, ximea]
     for c in cams:
-        c.load_params()
+        c.load_params(calib_dir=args.calib_dir)
         c.compute_maps()
 
     # Initialize predictors once
@@ -107,7 +111,8 @@ if __name__ == '__main__':
     )
 
     # Create dataset
-    dataset = YoloV5MultiCamDataset(args.data_dir, cams, set_type=SetType.TRAIN, undistort_rectify=True)
+    dataset = ReprojectionDataset(args.rgb_dir, args.rgb_labels_dir, args.right_dir, args.nir_dir,
+                                   cams, undistort_rectify=True)
 
     # Iterate with tqdm
     n_frames = len(dataset) if args.limit is None else min(args.limit, len(dataset))
