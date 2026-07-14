@@ -2,8 +2,8 @@
 """
 Side-by-side comparison of predicted vs ground-truth YOLO labels on NIR frames.
 
-For each frame, shows three panels on the demosaiced (false-color) Ximea image:
-predicted boxes | ground-truth boxes | both overlaid (pred=orange, GT=lime).
+For each frame, shows two panels on the demosaiced (false-color) Ximea image:
+ground-truth boxes (left, lime) | predicted boxes (right, orange).
 The title reports the per-frame mean IoU of greedily matched box pairs.
 
 Both label sets must be normalized to the raw mosaic frame (as produced by
@@ -91,15 +91,13 @@ def render(fig, axes, image_path, pred_path, gt_path):
     gt_boxes = remap_boxes(gl, gb, raw_w, raw_h)
 
     panels = [
-        (f"predicted ({len(pred_boxes)})", [(pred_boxes, PRED_COLOR)]),
-        (f"ground truth ({len(gt_boxes)})", [(gt_boxes, GT_COLOR)]),
-        ("overlay", [(gt_boxes, GT_COLOR), (pred_boxes, PRED_COLOR)]),
+        (f"ground truth ({len(gt_boxes)})", gt_boxes, GT_COLOR),
+        (f"predicted ({len(pred_boxes)})", pred_boxes, PRED_COLOR),
     ]
-    for ax, (title, layers) in zip(axes, panels):
+    for ax, (title, boxes, color) in zip(axes, panels):
         ax.clear()
         ax.imshow(img)
-        for boxes, color in layers:
-            draw_boxes(ax, boxes, w, h, color)
+        draw_boxes(ax, boxes, w, h, color)
         ax.set_title(title, fontsize=9)
         ax.axis("off")
 
@@ -107,6 +105,7 @@ def render(fig, axes, image_path, pred_path, gt_path):
     miou_str = f"mean IoU {miou:.3f}" if miou is not None else "no boxes"
     missing = "" if os.path.exists(pred_path) else "  [NO PREDICTION FILE]"
     fig.suptitle(f"{name}  —  {miou_str}{missing}", fontsize=10)
+    fig.tight_layout(rect=(0, 0, 1, 0.98))
     return miou
 
 
@@ -114,7 +113,7 @@ class CompareViewer:
     def __init__(self, frames):
         self.frames = frames
         self.idx = 0
-        self.fig, self.axes = plt.subplots(1, 3, figsize=(15, 4.5))
+        self.fig, self.axes = plt.subplots(1, 2, figsize=(12, 3.6))
         self.fig.canvas.mpl_connect("key_press_event", self.on_key)
         self.draw()
 
@@ -162,7 +161,7 @@ def main():
     if args.save_dir:
         matplotlib.use("Agg")
         os.makedirs(args.save_dir, exist_ok=True)
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
+        fig, axes = plt.subplots(1, 2, figsize=(12, 3.6))
         for image_path, pred_path, gt_path in frames:
             miou = render(fig, axes, image_path, pred_path, gt_path)
             stem = os.path.splitext(os.path.basename(image_path))[0]
