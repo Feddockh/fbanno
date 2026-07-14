@@ -1,20 +1,21 @@
+import argparse
 import os
 import numpy as np
 import torch
 from tqdm import tqdm
 
 from utils.camera import Camera
-from dataset import YoloMultiCamDataset, SetType, YoloV5MultiCamDataset
+from dataset import SetType, YoloV5MultiCamDataset
 from utils.utils import masks_to_boxes
 from predictors import SAM2Predictor, FoundationStereoPredictor
 from components import sample_frame, unproject_masks_to_3d, radius_outlier_filter, \
     transform_frame, project_to_plane, uvs_to_masks
 
 
-# DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rivendale_dataset")
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "datasets", "rivendale_v5")
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(REPO_DIR, "datasets", "rivendale_v6")
 
-def process_frame(idx, cams, dataset, sam_predictor, fs_predictor):
+def process_frame(idx, cams, dataset, sam_predictor, fs_predictor, output_dir):
     # Sample an image from the dataset
     (l_img, l_target, _), (r_img, _, _), (x_img, x_target, x_img_path) = sample_frame(dataset, idx, cams)
 
@@ -79,9 +80,16 @@ def process_frame(idx, cams, dataset, sam_predictor, fs_predictor):
     # Save the annotations to a file
     img_name = os.path.splitext(os.path.basename(x_img_path))[0]
     print(f"Saving annotations for {img_name}.txt")
-    dataset.save_annos(img_name, target=x_target_new, cam=cams[2])
+    dataset.save_annos(img_name, target=x_target_new, cam=cams[2], output_dir=output_dir)
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Reproject RGB annotations onto the NIR (ximea) camera.")
+    parser.add_argument("--data-dir", default=DATA_DIR, help="Multi-cam YOLO dataset root")
+    parser.add_argument("--output-dir", default=os.path.join(REPO_DIR, "outputs", "reprojected_labels"),
+                        help="Directory to write the reprojected ximea YOLO labels to")
+    parser.add_argument("--limit", type=int, default=None, help="Only process the first N frames")
+    args = parser.parse_args()
+
     # Set up cameras once
     firefly_left  = Camera("firefly_left")
     firefly_right = Camera("firefly_right")
@@ -94,13 +102,14 @@ if __name__ == '__main__':
     # Initialize predictors once
     sam_predictor = SAM2Predictor("facebook/sam2-hiera-tiny")
     fs_predictor  = FoundationStereoPredictor(
-        checkpoint_path="FoundationStereo/pretrained_models/23-51-11/model_best_bp2.pth",
-        config_path="FoundationStereo/pretrained_models/23-51-11/cfg.yaml",
+        checkpoint_path=os.path.join(REPO_DIR, "FoundationStereo/pretrained_models/23-51-11/model_best_bp2.pth"),
+        config_path=os.path.join(REPO_DIR, "FoundationStereo/pretrained_models/23-51-11/cfg.yaml"),
     )
 
     # Create dataset
-    dataset = YoloV5MultiCamDataset(DATA_DIR, cams, set_type=SetType.VAL, undistort_rectify=True)
+    dataset = YoloV5MultiCamDataset(args.data_dir, cams, set_type=SetType.TRAIN, undistort_rectify=True)
 
     # Iterate with tqdm
-    for idx in tqdm(range(len(dataset)), desc="Processing frames"):
-        process_frame(idx, cams, dataset, sam_predictor, fs_predictor)
+    n_frames = len(dataset) if args.limit is None else min(args.limit, len(dataset))
+    for idx in tqdm(range(n_frames), desc="Processing frames"):
+        process_frame(idx, cams, dataset, sam_predictor, fs_predictor, args.output_dir)

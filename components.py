@@ -77,11 +77,6 @@ def filter_points_by_distance(pts3d_per_mask, distance_threshold):
         filtered_pts3d.append(pts3d[mask])
     return filtered_pts3d
 
-def transform_frame(pts3d, R, t):
-    """
-    Transforms a list of 3D point sets to a new frame.
-    """
-
 def transform_frame(pts3d_list: List[np.ndarray], R: np.ndarray, t: np.ndarray) -> List[np.ndarray]:
     """
     Transform a list of point clouds to a new frame using a rotation and translation.
