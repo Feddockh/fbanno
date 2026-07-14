@@ -109,6 +109,30 @@ def evaluate(frames, class_ids, thresholds):
     return results
 
 
+def workload(frames, thresholds):
+    """Human-fix workload: classify every annotation at each IoU threshold.
+
+    Predictions and GT are first paired greedily by IoU regardless of threshold
+    (class-agnostic, IoU > 0), then each annotation lands in one bucket:
+      ok      — matched pair with IoU >= t (usable as-is)
+      adjust  — matched pair with IoU < t (right object, box needs resizing/moving)
+      add     — unmatched GT box (human must draw it)
+      delete  — unmatched prediction (human must remove it)
+    A matched pair counts once (one existing annotation to touch or not).
+    Returns {threshold: {ok, adjust, add, delete}}.
+    """
+    counts = {t: {"ok": 0, "adjust": 0, "add": 0, "delete": 0} for t in thresholds}
+    for _, pb, _, gb in frames:
+        matches = greedy_match(iou_matrix(pb, gb), threshold=1e-9)
+        for t in thresholds:
+            good = sum(1 for m in matches if m[2] >= t)
+            counts[t]["ok"] += good
+            counts[t]["adjust"] += len(matches) - good
+            counts[t]["add"] += len(gb) - len(matches)
+            counts[t]["delete"] += len(pb) - len(matches)
+    return counts
+
+
 def prf(stats):
     tp, fp, fn = stats["tp"], stats["fp"], stats["fn"]
     p = tp / (tp + fp) if tp + fp else 0.0
@@ -172,6 +196,22 @@ def main():
             summary[f"{t}/{name}"] = {"precision": p, "recall": r, "f1": f1, "mean_iou": miou,
                                       "tp": stats["tp"], "fp": stats["fp"], "fn": stats["fn"]}
         print("-" * len(header))
+
+    fix_counts = workload(frames, args.iou_thresholds)
+    print("\nHuman-fix workload (annotations needing manual action to reach GT):")
+    header2 = (f"{'IoU':>5}  {'total':>6} {'ok':>6} {'adjust':>7} {'add':>5} {'delete':>7} "
+               f"{'% needs fixing':>15}")
+    print(header2)
+    print("-" * len(header2))
+    for t in args.iou_thresholds:
+        c = fix_counts[t]
+        total = c["ok"] + c["adjust"] + c["add"] + c["delete"]
+        fix = c["adjust"] + c["add"] + c["delete"]
+        pct = 100.0 * fix / total if total else 0.0
+        print(f"{t:>5.2f}  {total:>6} {c['ok']:>6} {c['adjust']:>7} {c['add']:>5} {c['delete']:>7} "
+              f"{pct:>14.1f}%")
+        summary[f"{t}/workload"] = {**c, "total": total,
+                                    "pct_needs_fixing": round(pct, 2)}
 
     if args.json:
         summary["meta"] = {"pred_dir": args.pred_dir, "gt_dir": args.gt_dir,

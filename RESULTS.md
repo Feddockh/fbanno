@@ -40,6 +40,26 @@ output of the previous pipeline run).
 
 Per-class detail lives in `outputs/eval/baseline_{split}.json`.
 
+### Human-fix workload
+
+Every annotation is classified at each IoU threshold after class-agnostic
+greedy pairing (IoU > 0): **ok** = matched with IoU ≥ t (usable as-is),
+**adjust** = matched the right object but IoU < t (resize/move), **add** =
+GT box the pipeline missed (must be drawn), **delete** = spurious prediction
+(must be removed). "% needs fixing" = (adjust + add + delete) / total.
+
+| Split | Total annos | % needs fixing @0.25 | @0.50 | @0.75 |
+|---|---|---|---|---|
+| train | 1417 | 22.2% | 31.6% | 51.5% |
+| val   | 246  | 27.6% | 36.2% | 54.5% |
+| test  | 195  | 12.3% | 27.2% | 47.2% |
+
+At the practical "usable annotation" threshold of IoU 0.5, roughly **two
+thirds of annotations come out needing no human touch**; most of the fixing
+that remains is box adjustment (right object, wrong extent) rather than
+drawing or deleting boxes — e.g. train @0.50: 222 adjust vs 54 add + 172
+delete out of 1417.
+
 ### Takeaways
 
 - The transfer recovers **~78% of NIR GT boxes at IoU 0.5** (recall 0.74–0.80),
