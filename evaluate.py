@@ -17,11 +17,12 @@ Example:
         --json results_val.json
 
 Pass --image-dir to also generate side-by-side ground-truth/predicted comparison
-images (ground truth left, predictions right). With --save-dir, PNGs are batch
-rendered for every GT frame (optionally --sort, prefixing filenames with
-per-frame mean IoU so the worst frames sort first); without --save-dir, an
-interactive click-through viewer opens instead (Right/n = next, Left/p = prev,
-q/Esc = quit):
+images (ground truth left, predictions right), each filename prefixed with its
+per-frame mean IoU. Only the first --vis-limit frames are rendered (default 50;
+0 = no limit); pass --sort to order frames worst-first by mean IoU before that
+limit is applied, so you see the worst offenders rather than an arbitrary
+subset. With --save-dir, PNGs are batch rendered; without it, an interactive
+click-through viewer opens instead (Right/n = next, Left/p = prev, q/Esc = quit):
 
     python evaluate.py --pred-dir ... --gt-dir ... \
         --image-dir datasets/field_dataset_nir/images/val \
@@ -273,9 +274,14 @@ class CompareViewer:
             self.plt.close(self.fig)
 
 
-def generate_comparisons(gt_files, pred_dir, image_dir, save_dir=None, sort=False, limit=None):
+def generate_comparisons(gt_files, pred_dir, image_dir, save_dir=None, sort=False, limit=50):
     """Build (image_path, pred_path, gt_path) triples for GT frames with a matching
-    image, then either batch-render PNGs to save_dir or open an interactive viewer."""
+    image, then either batch-render PNGs to save_dir or open an interactive viewer.
+
+    Every rendered PNG is prefixed with its per-frame mean IoU. If sort=True,
+    frames are ordered worst-first by that IoU before limit is applied, so the
+    saved subset is the N worst frames rather than the first N alphabetically.
+    """
     import matplotlib
     import matplotlib.pyplot as plt
 
@@ -285,7 +291,13 @@ def generate_comparisons(gt_files, pred_dir, image_dir, save_dir=None, sort=Fals
         image_path = os.path.join(image_dir, stem + ".png")
         if not os.path.exists(image_path):
             continue
-        frames.append((image_path, os.path.join(pred_dir, stem + ".txt"), gt_path))
+        pred_path = os.path.join(pred_dir, stem + ".txt")
+        _, gb = load_yolo_file(gt_path)
+        _, pb = load_yolo_file(pred_path if os.path.exists(pred_path) else None)
+        miou = frame_mean_iou(pb, gb)
+        frames.append((image_path, pred_path, gt_path, miou))
+    if sort:
+        frames.sort(key=lambda f: f[3] if f[3] is not None else -1.0)
     if limit:
         frames = frames[:limit]
     if not frames:
@@ -296,16 +308,16 @@ def generate_comparisons(gt_files, pred_dir, image_dir, save_dir=None, sort=Fals
         matplotlib.use("Agg")
         os.makedirs(save_dir, exist_ok=True)
         fig, axes = plt.subplots(1, 2, figsize=(12, 3.6))
-        for image_path, pred_path, gt_path in frames:
+        for image_path, pred_path, gt_path, _ in frames:
             miou = render_comparison(fig, axes, image_path, pred_path, gt_path)
             stem = os.path.splitext(os.path.basename(image_path))[0]
-            prefix = f"iou{miou:.3f}_" if (sort and miou is not None) else ""
+            prefix = f"iou{miou:.3f}_" if miou is not None else "iouNA_"
             out = os.path.join(save_dir, f"{prefix}{stem}.png")
             fig.savefig(out, dpi=110, bbox_inches="tight")
             print(out)
         plt.close(fig)
     else:
-        viewer = CompareViewer(frames)
+        viewer = CompareViewer([(img, pred, gt) for img, pred, gt, _ in frames])
         print("Controls: Right/n = next, Left/p = prev, q/Esc = quit")
         plt.show()
 
@@ -323,9 +335,9 @@ def main():
     parser.add_argument("--save-dir", type=str, default=None,
                         help="With --image-dir: batch-render comparison PNGs here instead of opening a viewer")
     parser.add_argument("--sort", action="store_true",
-                        help="With --save-dir: prefix filenames with mean IoU so worst frames sort first")
-    parser.add_argument("--vis-limit", type=int, default=None,
-                        help="With --image-dir: only render the first N frames")
+                        help="With --image-dir: order frames worst-first by mean IoU before applying --vis-limit")
+    parser.add_argument("--vis-limit", type=int, default=50,
+                        help="With --image-dir: only render the first N frames (0 = no limit; default 50)")
     args = parser.parse_args()
 
     gt_files = sorted(glob.glob(os.path.join(args.gt_dir, "*.txt")))

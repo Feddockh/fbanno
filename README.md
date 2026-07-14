@@ -38,10 +38,11 @@ python3 evaluate.py --pred-dir outputs/reprojected_labels \
 
 Pass `--image-dir` to also generate side-by-side ground-truth/predicted
 comparison images (ground truth left, predictions right; handles both raw
-Ximea mosaic frames and regular images). With `--save-dir`, PNGs are batch
-rendered for every GT frame (`--sort` prefixes filenames with per-frame mean
-IoU so the worst frames sort first); without `--save-dir`, an interactive
-click-through viewer opens instead:
+Ximea mosaic frames and regular images), each filename prefixed with its
+per-frame mean IoU. Only the first `--vis-limit` frames are rendered (default
+50; `0` = no limit); `--sort` orders frames worst-first by mean IoU before
+that limit is applied. With `--save-dir`, PNGs are batch rendered; without
+it, an interactive click-through viewer opens instead:
 
 ```
 python3 evaluate.py --pred-dir outputs/reprojected_labels \
